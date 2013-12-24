@@ -1,0 +1,9 @@
+{application, ertdb,
+ [{description, "Erlang Real Time Database"},
+  {id, "Ertdb"},
+  {vsn, "1.0.0"},
+  {modules, []},
+  {registered, []},
+  {mod, {ertdb_app, []}},
+  {env, []},
+  {applications, [kernel, stdlib, sasl]}]}.

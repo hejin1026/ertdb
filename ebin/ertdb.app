@@ -1,0 +1,10 @@
+{application,ertdb,
+             [{description,"Erlang Real Time Database"},
+              {id,"Ertdb"},
+              {vsn,"1.0.0"},
+              {modules,[ertdb,ertdb_app,ertdb_journal,ertdb_socket,
+                        ertdb_store_current,ertdb_store_history,ertdb_util]},
+              {registered,[]},
+              {mod,{ertdb_app,[]}},
+              {env,[]},
+              {applications,[kernel,stdlib,sasl]}]}.
