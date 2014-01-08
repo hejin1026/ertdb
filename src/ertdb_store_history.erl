@@ -12,7 +12,7 @@
 -behavior(gen_server).
 
 -export([start_link/0,
-        read/4, 
+        read/4, lookup/2,
         write/5
 		]).
 		
@@ -46,6 +46,9 @@ write(Pid, Key, Time, Value, Config) ->
 	
 read(Pid, Key, Begin, End) ->
     gen_server:call(Pid, {read, Key, Begin, End}). 
+	
+lookup(Pid, Key) ->
+	gen_server:call(Pid, {lookup, Key}). 	
 		
 init([]) ->
 	{ok, Opts} = application:get_env(store),
@@ -114,18 +117,23 @@ get_idx(Begin, End, #state{dir=Dir, db = DB}) ->
 	end,
 	[LastDB|lists:reverse(DbInRange)].
 			
-
+handle_call({lookup, Key}, _From, #state{tb=TB} = State) ->
+	DataE = case ets:lookup(TB, Key) of
+		[] -> [];
+		[#rtd{row=Rows}] ->
+			lists:reverse(Rows)
+	end,
+	{reply, {ok, DataE}, State};	
 	
-handle_call({read, Key, Begin, End}, _From, State) ->
+handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
     %beginIdx is bigger than endidx
     DbInRange = get_idx(Begin, End, State),
 	?INFO("read_idx: ~s ~p", [Key, DbInRange]),	
     IdxList = [{Name, DataFd, [Idx || {_K, Idx} <- dets:lookup(IdxRef, Key)]} 
                     || #db{name=Name, index=IdxRef, data=DataFd} <- DbInRange],
 		
-    ?INFO("do read: ~p, ~p", [Key, IdxList]),
-    DataList = 
-    lists:map(fun({Name, DataFd, Indices}) -> 
+    % ?INFO("do read: ~p, ~p", [Key, IdxList]),
+    DataF = lists:map(fun({Name, DataFd, Indices}) -> 
 		% DataFile = lists:concat(["var/data", '/', Name, '.data']),		
 		% {ok, DataFd} = file:open(DataFile, [read, write, append | ?OPEN_MODES]),
         case file:pread(DataFd, Indices) of
@@ -139,7 +147,20 @@ handle_call({read, Key, Begin, End}, _From, State) ->
 	            {error, Reason}
         end
     end, [ E || {_, _, Indices} = E <- IdxList, Indices =/= []]),
-    {reply, {ok, lists:flatten([Rows || {ok, Rows} <- DataList])}, State};	
+	DataFl = [Rows || {ok, Rows} <- DataF],
+	Today = extbif:timestamp(),	
+	DataList =  
+		if 	(End div ?DAY) == (Today div ?DAY) -> 
+			DataE = case ets:lookup(TB, Key) of
+				[] -> [];
+				[#rtd{row=Rows}] ->
+					lists:reverse(Rows)
+			end,
+			lists:append([DataFl, DataE]);
+		true -> 
+			DataFl
+	end,
+    {reply, {ok, lists:flatten(DataList)}, State};	
 
 	
 handle_call(Req, _From, State) ->
@@ -147,7 +168,7 @@ handle_call(Req, _From, State) ->
     {stop, {error, {bagreq, Req}}, State}.		
 	
 		
-handle_cast({write, Key, Time, Value, #rtk_config{compress=P, his_maxtime=Maxtime}=Config}, 
+handle_cast({write, Key, Time, Value, #rtk_config{compress=Compress, his_maxtime=Maxtime}=Config}, 
 		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
 	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
 	case ets:lookup(TB, Key) of
@@ -156,12 +177,13 @@ handle_cast({write, Key, Time, Value, #rtk_config{compress=P, his_maxtime=Maxtim
 			Rtd =#rtd{key=Key,time=Time,last=Value,ref=Ref,row=[{Time,Value}]},
 			ets:insert(TB, Rtd);
 		[#rtd{time=LastTime, last=LastValue,ref=LastRef, row=Rows}] ->
-			case P of
-				<<"1">> ->
+			case Compress of
+				"1" ->
 					case check({last, LastTime, LastValue}, {new, Time, Value}, Config) of
 						true ->
+							?INFO("his pass data:~p", [{new, Time, Value}]),
 							cancel_timer(LastRef),			
-							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key, Config}),
+							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 							NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
 							if length(Rows)+1 >= Buffer ->
 								flush_to_disk(DB, Key, Rows),
@@ -170,6 +192,7 @@ handle_cast({write, Key, Time, Value, #rtk_config{compress=P, his_maxtime=Maxtim
 								ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
 							end;	 	
 						false ->
+							?INFO("his filte data:~p", [{new, Time, Value}]),
 							ok
 					end;
 				_ ->
@@ -191,11 +214,12 @@ handle_cast(Msg, State) ->
     {noreply, State}.
 
 handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer} = State) ->
-	[#rtk_config{maxtime=Maxtime}] = ertdb:lookup(Key),
+	[#rtk_config{his_maxtime=Maxtime}] = ertdb:lookup(Key),
 	case ets:lookup(TB, Key) of
 		[] ->
 			throw({no_key, Key});
-		[#rtd{last=Value, row=Rows}] ->			
+		[#rtd{last=Value, row=Rows}] ->
+			?INFO("his maxtime data:~p", [{Key, Value}]),			
 			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 			Time = extbif:timestamp(),
 			NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
@@ -249,12 +273,12 @@ close(#db{index=IdxRef, data=DataFd}) ->
     file:close(DataFd).	
 
 
-check({last, Lastime, _LastValue}, {new, Time, _Value}, #rtk_config{his_dev=undefined, mintime=Mintime, maxtime=Maxtime}) ->
+check({last, Lastime, _LastValue}, {new, Time, _Value}, #rtk_config{his_dev=undefined, his_mintime=Mintime, his_maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
 	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
 	judge([Rule], [{interval, Interval}]);
 
-check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{his_dev=Dev, mintime=Mintime, maxtime=Maxtime}) ->
+check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{his_dev=Dev, his_mintime=Mintime, his_maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
 	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
 	Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
@@ -268,7 +292,9 @@ judge([Rule|Rs], Data) ->
 	{ok, Exp} = prefix_exp:parse(Rule),
 	case prefix_exp:eval(Exp, Data) of
 		true -> judge(Rs, Data);
-		false -> false
+		false -> 
+			?INFO("judge false :~p, ~p",[Rule, Data]),
+			false
 	end.	
 			
 cancel_timer('undefined') -> ok;

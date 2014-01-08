@@ -35,5 +35,5 @@ init([]) ->
 	CurStore = ?CHILD(ertdb_store_current, worker),
 	HisStore = ?CHILD(ertdb_store_history, worker),
 		   
-	{ok, {{one_for_one, 5, 10}, [Ertdb, Socket, Journal, CurStore, HisStore]}}.
+	{ok, {{one_for_one, 5, 10}, [Ertdb, Socket, Httpd, Journal, CurStore, HisStore]}}.
 	

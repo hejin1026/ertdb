@@ -72,12 +72,14 @@ handle_cast({write, Key, Time, Value}, #state{rttb = Rttb} = State) ->
 				[#rtd{time=LastTime, value=LastValue,ref=LastRef}] ->
 					case check({last,LastTime,LastValue}, {new,Time,Value}, Config) of
 						true ->
+							?INFO("cur pass data:~p", [{new, Time, Value}]),
 							cancel_timer(LastRef),
 							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 							NewRtData = #rtd{key=Key,time=Time,value=Value,ref=Ref},
 							ertdb_store_history:write(ertdb_store_history, Key, LastTime, LastValue, Config),
 							ets:insert(Rttb, NewRtData);
 						false ->
+							?INFO("cur filte data:~p", [{new, Time, Value}]),
 							ok
 					end
 			end			
@@ -94,7 +96,7 @@ handle_info({maxtime, Key}, #state{rttb = Rttb} = State) ->
 		[] ->
 			throw({no_key, Key});
 		[#rtd{value=Value, time=LastTime}=LastRtd] ->
-			?INFO("maxtime update last:~p", [LastRtd]),			
+			?INFO("cur maxtime data:~p", [LastRtd]),			
 			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 			Time = extbif:timestamp(),
 			true = ets:insert(Rttb, LastRtd#rtd{time=Time, ref=Ref}),
@@ -129,9 +131,7 @@ judge([Rule|Rs], Data) ->
 	{ok, Exp} = prefix_exp:parse(Rule),
 	case prefix_exp:eval(Exp, Data) of
 		true -> judge(Rs, Data);
-		false -> 
-			?INFO("check false:~p, ~p", [Rule, Data]),
-			false
+		false -> false
 	end.	
 			
 cancel_timer('undefined') -> ok;

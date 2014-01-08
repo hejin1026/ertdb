@@ -27,43 +27,52 @@ loop(Req) ->
     Method = Req:get(method),
 	?INFO("~s ~s", [Method, Req:get(raw_path)]),
 	Path = list_to_tuple(string:tokens(Req:get(raw_path), "/")),
-	handle(Method, Path, Req).
+	try
+		handle(Method, Path, Req)
+	catch Type:Error ->
+		?ERROR("error :~p, ~p, ~p", [Type, Error, erlang:get_stacktrace()]),
+		Req:respond({404, [], <<"catch exception">>})
+	end.		
 
-handle('GET', {"rrdb", Key, "last"}, Req) ->
-    folsom_metrics:notify({'http.last', {inc, 1}}),
-	case errdb:last(unquote(Key)) of
-    {ok, Time, Fields, Values} ->
-        Resp = ["TIME:", join(Fields, ","), "\n", errdb_lib:line(Time, Values)],
+handle('GET', {"rtdb", Key}, Req) ->
+	% ?INFO("get key:~p, ~p", [Key, unquote(Key)]),
+	case ertdb:fetch(list_to_binary(unquote(Key))) of
+    {ok, {Time, Value}} ->
+        Resp = ["TIME:Value\n",format_data({Time, Value})],
         Req:ok({"text/plain", Resp});
+	{ok, Other} ->
+		Req:ok({"text/plain", extbif:to_list(Other)});	
     {error, Reason} ->
 		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
         Req:respond({500, [], atom_to_list(Reason)})
 	end;
 
-handle('GET', {"rrdb", RawKey, "last", RawFields}, Req) ->
-    folsom_metrics:notify({'http.last', {inc, 1}}),
-	Key = unquote(RawKey),
-	Fields = unquote(RawFields),
-	case errdb:last(Key, tokens(Fields, ",")) of
-    {ok, Time, Values} -> 
-        Resp = ["TIME:", Fields, "\n", errdb_lib:line(Time, Values)],
-        Req:ok({"text/plain", Resp});
-    {error, Reason} ->
-		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
-        Req:respond({500, [], atom_to_list(Reason)})
-	end;
-
-handle('GET', {"rrdb", RawKey, RawFields, RawRange}, Req) ->
-    folsom_metrics:notify({'http.fetch', {inc, 1}}),
-	Key = unquote(RawKey),
-	Fields = unquote(RawFields),
-	Range = unquote(RawRange),
-    [Begin, End] = tokens(Range, "-"),
-	case errdb:fetch(Key, tokens(Fields, ","),
-        list_to_integer(Begin), list_to_integer(End)) of
+handle('GET', {"rtdb", Key, "lookup"}, Req) ->
+	% ?INFO("get key:~p, ~p", [Key, unquote(Key)]),
+	case  ertdb_store_history:lookup(ertdb_store_history, list_to_binary(unquote(Key)))of
     {ok, Records} -> 
-        Lines = join([errdb_lib:line(Time, Values) || {Time, Values} <- Records], "\n"),
-        Resp = ["TIME:", Fields, "\n", Lines],
+        Lines = join([format_data(Item) || Item <- Records], "\n"),
+        Resp = ["TIME:Value\n", Lines],
+        Req:ok({"text/plain", Resp});
+    {error, Reason} ->
+		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
+        Req:respond({500, [], atom_to_list(Reason)})
+	end;
+
+handle('GET', {"rtdb", RawKey, RawRange}, Req) ->
+	Key = unquote(RawKey),
+	Range = unquote(RawRange),
+    {BeginT, EndT} = case tokens(Range, "-") of
+		[Begin] ->
+			{extbif:timestamp({to_date(Begin), time()}), extbif:timestamp()};	
+		[Begin, End] ->
+			{extbif:timestamp({to_date(Begin), time()}), extbif:timestamp({to_date(End), time()})}
+	end,		
+	% ?INFO("begin:~p, end:~p", [BeginT, EndT]),
+	case ertdb:fetch(list_to_binary(Key), BeginT, EndT) of
+    {ok, Records} -> 
+        Lines = join([format_data(Item) || Item <- Records], "\n"),
+        Resp = ["TIME:Value\n", Lines],
         Req:ok({"text/plain", Resp});
     {error, Reason} ->
 		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
@@ -72,3 +81,32 @@ handle('GET', {"rrdb", RawKey, RawFields, RawRange}, Req) ->
 
 handle(_Other, _Path, Req) ->
 	Req:respond({404, [], <<"bad request, path not found.">>}). 
+	
+to_date(StrfDatetime) when is_list(StrfDatetime)->
+	case length(StrfDatetime) of
+		8 ->
+			Y = string:sub_string(StrfDatetime, 1, 4),
+			M = string:sub_string(StrfDatetime, 5, 6),
+			D = string:sub_string(StrfDatetime, 7, 8),
+			{list_to_integer(Y), list_to_integer(M), list_to_integer(D)};
+		_ ->
+			throw({unknow_date, StrfDatetime})
+	end;			
+to_date({_,_,_}=Date) ->
+	Date.			
+	
+format_data({Time, Value}) ->
+	lists:concat([extbif:strftime(extbif:datetime(Time)), " ==> ", binary_to_list(Value)]);
+format_data(Data) ->
+	Data.		
+	
+	
+	
+	
+	
+	
+	
+	
+	
+		
+	
