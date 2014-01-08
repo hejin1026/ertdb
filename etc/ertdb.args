@@ -1,0 +1,38 @@
+## Name of the node
+-sname ertdb
+
+## Cookie for distributed erlang.  All nodes in the same cluster
+## should use the same cookie or they will not be able to communicate.
+-setcookie public
+
+-s ertdb_app start 
+
+-s reloader start
+
+-boot start_sasl 
+ 
+## Heartbeat management; auto-restarts VM if it dies or becomes unresponsive
+## (Disabled by default..use with caution!)
+##-heart
+-smp auto
+
+## Enable kernel poll and a few async threads
++K true
+
++A 2
+
+## Treat error_logger warnings as warnings
++W w
+
+## Increase number of concurrent ports/sockets
+-env ERL_MAX_PORTS 4096
+
+## Tweak GC to run more often 
+-env ERL_FULLSWEEP_AFTER 0
+
+## Set the location of crash dumps
+-env ERL_CRASH_DUMP log/erl_crash.dump
+
+## Set max ets tables
+-env ERL_MAX_ETS_TABLES 1400
+

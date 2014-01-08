@@ -14,7 +14,12 @@ start() ->
 	application:start(ertdb).
 	
 start(_Type, _Args) ->
-	[application:start(App) || App <- [sasl, crypto]],
+	% [ok = application:start(App) || App <- [crypto, lager]],
+	ok = application:start(crypto),
+	ok = application:start(compiler),
+	ok = application:start(syntax_tools),
+	ok = application:start(goldrush),
+	ok = application:start(lager),
     {ok, SupPid} = ertdb_sup:start_link(),
     true = register(ertdb_app, self()),
     {ok, SupPid}.

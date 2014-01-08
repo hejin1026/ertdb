@@ -11,15 +11,15 @@
 -import(proplists, [get_value/3]).
 
 -include("elog.hrl").
+-include("ertdb.hrl").
 
 -behavior(gen_server).
 
 -export([start_link/0,
-        % read/4, 
-        write/2,
-		config/2
+        write/4,
+		read/2
 		]).
-
+		
 -export([init/1, 
         handle_call/3, 
         handle_cast/2,
@@ -29,51 +29,57 @@
 
 -record(state, {rttb}).
 
--record(rtd, {key, time, value, config, ref}).
+-record(rtd, {key, time, value, ref}).
 
 start_link() ->
-    gen_server2:start_link({local, ?MODULE}, ?MODULE, [],
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [],
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
-write(Pid, {Key, Time, Value}) ->
-    gen_server2:cast(Pid, {write, Key, Time, Value}).
+write(Pid, Key, Time, Value) ->
+    gen_server:cast(Pid, {write, Key, Time, Value}).
 		
-config(Pid, {Key, Config}) ->
-	gen_server2:cast(Pid, {config, Key, Config}).		
+read(Pid, Key) ->
+	gen_server:call(Pid, {read, Key}).	
 		
 init([]) ->
-	RTTB = ets:new(rttb, [set, {keypos, #rtd.key}]),
-	{ok, #state{rttb = RTTB}}.
+    RTTB = ets:new(rttb, [set, {keypos, #rtd.key}]),
+    {ok, #state{rttb = RTTB}}.
 	
+handle_call({read, Key}, _From, #state{rttb = Rttb} = State) ->
+	Res = case ets:lookup(Rttb, Key) of
+		[] -> {ok, no_key};
+		[#rtd{time=Time, value=Value}] ->
+			{ok, {Time, Value}}
+	end,	
+	{reply, Res, State};
 	
 handle_call(Req, _From, State) ->
     ?ERROR("badreq: ~p", [Req]),
     {stop, {error, {bagreq, Req}}, State}.		
 	
-handle_cast({config, Key, Config}, #state{rttb = Rttb} = State) ->
-	case ets:lookup(Rttb, Key) of
-		[] ->
-			ets:insert(Rttb, #rtd{key=Key,config=Config});
-		[RtData] ->
-			ets:insert(Rttb, RtData#rtd{config=Config})
-	end,
-	{noreply, State};				
 		
 handle_cast({write, Key, Time, Value}, #state{rttb = Rttb} = State) ->
-	case ets:lookup(Rttb, Key) of
-		[] -> %unconfig
+	?INFO("cur write:~p, ~p,~p", [Key, Time, Value]),
+	case ertdb:lookup(Key) of
+		[] -> 
 			ets:insert(Rttb, #rtd{key=Key,time=Time,value=Value});
-		[#rtd{time=Time, value=Value,config=Config, ref=LastRef}] ->
-			case check({last,Time,Value}, {new,Time,Value},Config) of
-				true ->
-					cancel_timer(LastRef),
-					Maxtime = propslist:get_value(cur_maxtime, Config),
-					Ref = erlang:send_after(Maxtime, self(), {maxtime, Key}),
-					NewRtData = #rtd{key=Key,time=Time,value=Value,config=Config,ref=Ref},
-					ets:insert(Rttb, NewRtData),
-					ertdb_store_history:write(Key, Time, Value, Config);
-				false ->
-					ok
+		[#rtk_config{maxtime=Maxtime} = Config] ->
+			case ets:lookup(Rttb, Key) of
+				[] ->
+					Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+					NewRtData = #rtd{key=Key,time=Time,value=Value,ref=Ref},
+					ets:insert(Rttb, NewRtData);
+				[#rtd{time=LastTime, value=LastValue,ref=LastRef}] ->
+					case check({last,LastTime,LastValue}, {new,Time,Value}, Config) of
+						true ->
+							cancel_timer(LastRef),
+							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+							NewRtData = #rtd{key=Key,time=Time,value=Value,ref=Ref},
+							ertdb_store_history:write(ertdb_store_history, Key, LastTime, LastValue, Config),
+							ets:insert(Rttb, NewRtData);
+						false ->
+							ok
+					end
 			end			
 	end,
 	{noreply, State};		
@@ -83,15 +89,16 @@ handle_cast(Msg, State) ->
     {noreply, State}.
 	
 handle_info({maxtime, Key}, #state{rttb = Rttb} = State) ->
+	[#rtk_config{maxtime=Maxtime}=Config] = ertdb:lookup(Key),
 	case ets:lookup(Rttb, Key) of
 		[] ->
 			throw({no_key, Key});
-		[#rtd{value=Value, config=Config}=LastRtd] ->			
-			Maxtime = propslist:get_value(cur_maxtime, Config),
-			Ref = erlang:send_after(Maxtime, self(), {maxtime, Key}),
-			Time = ertdb_util:timestamp(),
-			ets:insert(Rttb, LastRtd#rtd{time=Time, ref=Ref}),
-			ertdb_store_history:write(Key, Time, Value, Config)
+		[#rtd{value=Value, time=LastTime}=LastRtd] ->
+			?INFO("maxtime update last:~p", [LastRtd]),			
+			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+			Time = extbif:timestamp(),
+			true = ets:insert(Rttb, LastRtd#rtd{time=Time, ref=Ref}),
+			ertdb_store_history:write(ertdb_store_history, Key, LastTime, Value, Config)
 	end,	
 	{noreply, State};
 		
@@ -108,13 +115,12 @@ code_change(_OldVsn, State, _Extra) ->
 	
 	
 %%-----inter fun----%%	
-check({last, Lastime, LastValue}, {new, Time, Value}, Config) ->
-	Rule0 = "= has_cur 1",
+check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{dev=Dev, mintime=Mintime, maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
-	Rule = "&(> interval cur_mintime)(< interval cur_maxtime)",
-	Deviation = abs(Value - LastValue),
-	Rule2 = "> deviation cur_deviation",	
-	judge([Rule0,Rule,Rule2], [{interval, Interval}, {deviation, Deviation}|Config]).
+	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
+	Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
+	Rule2 = lists:concat(["> deviation ", Dev]),	
+	judge([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}]).
 		
 	
 judge([], _Data) ->	
@@ -123,7 +129,9 @@ judge([Rule|Rs], Data) ->
 	{ok, Exp} = prefix_exp:parse(Rule),
 	case prefix_exp:eval(Exp, Data) of
 		true -> judge(Rs, Data);
-		false -> false
+		false -> 
+			?INFO("check false:~p, ~p", [Rule, Data]),
+			false
 	end.	
 			
 cancel_timer('undefined') -> ok;

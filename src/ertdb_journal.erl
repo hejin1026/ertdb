@@ -13,7 +13,7 @@
 -behavior(gen_server).
 
 -export([start_link/0, 
-        write/2]).
+        write/4]).
 
 -export([init/1, 
         handle_call/3, 
@@ -30,11 +30,11 @@
 %% Description: Starts the server
 %%--------------------------------------------------------------------
 start_link() ->
-    gen_server2:start_link({local, ?MODULE}, ?MODULE, [],
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [],
                 [{spawn_opt, [{min_heap_size, 20480}]}]).
 
-write(Pid, {Key, Time, Value}) ->
-    gen_server2:cast(Pid, {write, Key, Time, Value}).
+write(Pid, Key, Time, Value) ->
+    gen_server:cast(Pid, {write, Key, Time, Value}).
 
 %%--------------------------------------------------------------------
 %% Function: init(Args) -> {ok, State} |

@@ -4,18 +4,19 @@
 %%%----------------------------------------------------------------------
 -module(ertdb_store_history).
 
--import(extbif, [zeropad/1]).
-
 -import(proplists, [get_value/3]).
 
 -include("elog.hrl").
+-include("ertdb.hrl").
 
 -behavior(gen_server).
 
 -export([start_link/0,
-        % read/4, 
-        write/2
+        read/4, 
+        write/5
 		]).
+		
+-export([open/1]).		
 
 -export([init/1, 
         handle_call/3, 
@@ -30,29 +31,37 @@
 
 -define(RTDB_VER, <<"RTDB0001">>).
 
--record(state, {dir, rttb, buffer, db}).
+-record(state, {dir, tb, buffer, db}).
 
 -record(rtd, {key, time, last, ref, row}).
 
--record(db, {index, data}).
+-record(db, {name, index, data}).
 
 start_link() ->
-    gen_server2:start_link({local, ?MODULE}, ?MODULE, [],
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [],
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
-write(Pid, {Key, Time, Value, Config}) ->
-    gen_server2:cast(Pid, {write, Key, Time, Value, Config}).
+write(Pid, Key, Time, Value, Config) ->
+    gen_server:cast(Pid, {write, Key, Time, Value, Config}).
+	
+read(Pid, Key, Begin, End) ->
+    gen_server:call(Pid, {read, Key, Begin, End}). 
 		
 init([]) ->
 	{ok, Opts} = application:get_env(store),
 	Dir = get_value(dir, Opts, "var/data"),
 	Buffer = get_value(buffer, Opts, 20),
-	DB = open(Dir),
-	RTTB = ets:new(rttb_last, [set, {keypos, #rtd.key}]),
-	{ok, #state{dir=Dir, buffer=Buffer+random:uniform(Buffer), rttb = RTTB, db=DB}}.
+	{ok, DB} = open(Dir),
+    %schedule daily rotation
+    sched_daily_rotate(),
+	TB = ets:new(rttb_last, [set, {keypos, #rtd.key}]),
+	{ok, #state{dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB}}.
 
 open(Dir) ->
-	Name = dbname(),
+	open(Dir, dbname(extbif:timestamp())).
+
+open(Dir, Name) ->
+	?INFO("open file:~p", [Name]),
 	IdxRef = lists:concat([Name, '_index']),
 	IdxFile = lists:concat([Dir, '/', Name, '.idx']),
 	DataFile = lists:concat([Dir, '/', Name, '.data']),
@@ -68,40 +77,112 @@ open(Dir) ->
 	    {ok, ?RTDB_VER} -> ok;
 	    eof -> file:write(DataFd, ?RTDB_VER)
     end,
-	{ok, #db{index=IdxRef, data=DataFd} }.
+	{ok, #db{name=Name, index=IdxRef, data=DataFd} }.
+
+sched_daily_rotate() ->
+    Now = extbif:timestamp(),
+    NextDay = (Now div ?DAY + 1) * ?DAY,
+    %?INFO("will rotate at: ~p", [ertdb_util:datetime(NextDay)]),
+    Delta = (NextDay + 1 - Now) * 1000,
+    erlang:send_after(Delta, self(), rotate).
 	
-dbname() ->
-	Ts = extbif:timestamp(),
+dbname(Ts) ->
 	integer_to_list(Ts div ?DAY).	
+
+get_idx(Begin, End, #state{dir=Dir, db = DB}) ->
+	Today = extbif:timestamp(),	
+	CBegin = if Today > Begin ->
+					Begin;
+				true ->
+					Today
+				end,
+	CEnd = if Today > End ->
+					End;
+				true ->
+					Today
+				end,
+	BeginIdx = CBegin div ?DAY, 
+	EndIdx = CEnd div ?DAY,
+	?INFO("beginidx:~p, endidx:~p", [BeginIdx, EndIdx]),
+    DbInRange = 
+		lists:map(fun(Idx) ->
+			{ok, NDB} = open(Dir, Idx), NDB
+		end, lists:seq(BeginIdx, EndIdx-1)),
+	LastDB = 
+	if 	EndIdx == (Today div ?DAY) -> DB;
+		true -> {ok, LDB} = open(Dir, EndIdx), LDB
+	end,
+	[LastDB|lists:reverse(DbInRange)].
+			
+
+	
+handle_call({read, Key, Begin, End}, _From, State) ->
+    %beginIdx is bigger than endidx
+    DbInRange = get_idx(Begin, End, State),
+	?INFO("read_idx: ~s ~p", [Key, DbInRange]),	
+    IdxList = [{Name, DataFd, [Idx || {_K, Idx} <- dets:lookup(IdxRef, Key)]} 
+                    || #db{name=Name, index=IdxRef, data=DataFd} <- DbInRange],
+		
+    ?INFO("do read: ~p, ~p", [Key, IdxList]),
+    DataList = 
+    lists:map(fun({Name, DataFd, Indices}) -> 
+		% DataFile = lists:concat(["var/data", '/', Name, '.data']),		
+		% {ok, DataFd} = file:open(DataFile, [read, write, append | ?OPEN_MODES]),
+        case file:pread(DataFd, Indices) of
+	        {ok, DataL} ->
+				% ?INFO("get datal:~p", [DataL]),
+	            {ok, [binary_to_term(Data) || Data <- DataL]};
+	        eof -> 
+	            {ok, []};
+	        {error, Reason} -> 
+	            ?ERROR("pread ~p error: ~p", [Name, Reason]),
+	            {error, Reason}
+        end
+    end, [ E || {_, _, Indices} = E <- IdxList, Indices =/= []]),
+    {reply, {ok, lists:flatten([Rows || {ok, Rows} <- DataList])}, State};	
+
 	
 handle_call(Req, _From, State) ->
     ?ERROR("badreq: ~p", [Req]),
     {stop, {error, {bagreq, Req}}, State}.		
 	
 		
-handle_cast({write, Key, Time, Value, Config}, #state{rttb=Rttb, db=DB, buffer=Buffer} = State) ->
-	case ets:lookup(Rttb, Key) of
+handle_cast({write, Key, Time, Value, #rtk_config{compress=P, his_maxtime=Maxtime}=Config}, 
+		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
+	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
+	case ets:lookup(TB, Key) of
 		[] -> 
-			Maxtime = propslist:get_value(his_maxtime, Config),
-			Ref = erlang:send_after(Maxtime, self(), {maxtime, Maxtime}),
+			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 			Rtd =#rtd{key=Key,time=Time,last=Value,ref=Ref,row=[{Time,Value}]},
-			ets:insert(Rttb, Rtd);
+			ets:insert(TB, Rtd);
 		[#rtd{time=LastTime, last=LastValue,ref=LastRef, row=Rows}] ->
-			case check({last, LastTime, LastValue}, {new, Time, Value}, Config) of
-				true ->
-					erlang:cancel_timer(LastRef),			
-					Maxtime = propslist:get_value(his_maxtime, Config),
-					Ref = erlang:send_after(Maxtime, self(), {maxtime, Key, Config}),
-					NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref,row=[{Time,Value}|Rows]},
-					if length(Rows) >= Buffer ->
-						flush_to_disk(DB, Key, Rows),
-						ets:insert(Rttb, NewRtData#rtd{row=[]});
+			case P of
+				<<"1">> ->
+					case check({last, LastTime, LastValue}, {new, Time, Value}, Config) of
+						true ->
+							cancel_timer(LastRef),			
+							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key, Config}),
+							NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
+							if length(Rows)+1 >= Buffer ->
+								flush_to_disk(DB, Key, Rows),
+								ets:insert(TB, NewRtData#rtd{row=[]});
+							true ->
+								ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
+							end;	 	
+						false ->
+							ok
+					end;
+				_ ->
+					cancel_timer(LastRef),			
+					Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+					NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
+					if length(Rows)+1 >= Buffer ->
+						flush_to_disk(DB, Key, [{Time,Value}|Rows]),
+						ets:insert(TB, NewRtData#rtd{row=[]});
 					true ->
-						ets:insert(Rttb, NewRtData)
-					end;	 	
-				false ->
-					ok
-			end			
+						ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
+					end
+			end						
 	end,
 	{noreply, State};		
 		
@@ -109,30 +190,39 @@ handle_cast(Msg, State) ->
     ?ERROR("badmsg: ~p", [Msg]),
     {noreply, State}.
 
-handle_info({maxtime, Key, Config}, #state{rttb = Rttb, db=DB, buffer=Buffer} = State) ->
-	case ets:lookup(Rttb, Key) of
+handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer} = State) ->
+	[#rtk_config{maxtime=Maxtime}] = ertdb:lookup(Key),
+	case ets:lookup(TB, Key) of
 		[] ->
 			throw({no_key, Key});
 		[#rtd{last=Value, row=Rows}] ->			
-			Maxtime = propslist:get_value(his_maxtime, Config),
-			Ref = erlang:send_after(Maxtime, self(), {maxtime, Key, Config}),
-			Time = ertdb_util:timestamp(),
-			NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref,row=[{Time,Value}|Rows]},
-			if length(Rows) >= Buffer ->
-				flush_to_disk(DB, Key, Rows),
-				ets:insert(Rttb, NewRtData#rtd{row=[]});
+			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+			Time = extbif:timestamp(),
+			NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
+			if length(Rows)+1 >= Buffer ->
+				flush_to_disk(DB, Key, [{Time,Value}|Rows]),
+				ets:insert(TB, NewRtData#rtd{row=[]});
 			true ->
-				ets:insert(Rttb, NewRtData)
+				ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
 			end
 	end,	
 	{noreply, State};
 		
+handle_info(rotate, #state{dir=Dir, db=DB} = State) ->
+    {ok, NewDB} = open(Dir),
+    %close oldest db
+    close(DB),
+    %rotation 
+    sched_daily_rotate(),
+	{noreply, State#state{db=NewDB} };
+		
 	
 handle_info(Info, State) ->
-    ?ERROR("badinfo: ~p", [Info]),
+    ?ERROR("his badinfo: ~p", [Info]),
     {noreply, State}.	
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{db = DB}) ->
+	close(DB),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -144,23 +234,32 @@ flush_to_disk(#db{index=IdxRef,  data=DataFd}, Key, Rows) ->
     {ok, Pos} = file:position(DataFd, eof),
     Data = term_to_binary(lists:reverse(Rows), [compressed]),
     Idx = {Key, {Pos, size(Data)}},
-    %?INFO("Pos: ~p, LastPos: ~p, Size: ~p", [Pos, LastPos, size(Data)]),
+    ?INFO("Pos: ~p, LastPos: ~p, Size: ~p", [Pos, Pos, size(Data)]),
     case file:write(DataFd, Data) of
     ok ->
-        %?INFO("write indices: ~p", [Indices]),
+        ?INFO("write indices: ~p", [Idx]),
         dets:insert(IdxRef, Idx);
     {error, Reason} ->
         ?ERROR("~p", [Reason])
     end.
 	
+close(undefined) -> ok;
+close(#db{index=IdxRef, data=DataFd}) ->
+    dets:close(IdxRef),
+    file:close(DataFd).	
 
-check({last, Lastime, LastValue}, {new, Time, Value}, Config) ->
-	Rule0 = "= has_cur 1",
+
+check({last, Lastime, _LastValue}, {new, Time, _Value}, #rtk_config{his_dev=undefined, mintime=Mintime, maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
-	Rule = "&(> interval his_mintime)(< interval his_maxtime)",
-	Deviation = abs(Value - LastValue),
-	Rule2 = "> deviation his_deviation",	
-	judge([Rule0, Rule,Rule2], [{interval, Interval}, {deviation, Deviation}|Config]).
+	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
+	judge([Rule], [{interval, Interval}]);
+
+check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{his_dev=Dev, mintime=Mintime, maxtime=Maxtime}) ->
+	Interval = Time - Lastime,
+	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
+	Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
+	Rule2 = lists:concat(["> deviation ", Dev]),	
+	judge([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}]).
 		
 	
 judge([], _Data) ->	
@@ -172,5 +271,8 @@ judge([Rule|Rs], Data) ->
 		false -> false
 	end.	
 			
+cancel_timer('undefined') -> ok;
+cancel_timer(Ref) -> erlang:cancel_timer(Ref).
+
 		
 			

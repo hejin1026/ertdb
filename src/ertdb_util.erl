@@ -16,3 +16,4 @@ timestamp({{_Y,_M,_D}, {_H,_MM,_S}} = DateTime) ->
 	
 datetime() ->
     calendar:local_time().	
+	

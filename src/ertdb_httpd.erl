@@ -5,88 +5,70 @@
 %%%----------------------------------------------------------------------
 -module(ertdb_httpd).
 
--author('hejin').
-
 -include("elog.hrl").
 
--export([start/1]).
+-import(string, [join/2, tokens/2]).
 
--export([init/3,
-		handle/2,
-		terminate/3]).
-		
--define(MAX_SIZE, 1024*1024).		
+-import(mochiweb_util, [unquote/1]).
+
+-export([start/1,
+        loop/1,
+        stop/0]).
 
 %% External API
-start(Opts) ->
-	Dispatch = cowboy_router:compile([
-		{'_', [
-			{"/measure", ertdb_httpd, []}
-		]}
-	]),
-	%% Name, NbAcceptors, TransOpts, ProtoOpts
-	{ok, Pid} = cowboy:start_http(?MODULE, 100, Opts,
-		[{env, [{dispatch, Dispatch}]}]
-	),
-	Port = proplists:get_value(port, Opts),
-	?PRINT("Extend104 Httpd is listening on ~p~n", [Port]),
-	{ok, Pid}.
-	
+start(Options) ->
+    ?INFO_MSG("ertdb_httpd is started."),
+    mochiweb_http:start([{name, ?MODULE}, {loop, fun loop/1} | Options]).
 
-init(_Transport, Req, []) ->
-	{ok, Req, undefined}.
+stop() ->
+    mochiweb_http:stop(?MODULE).
 
-handle(Req, State) ->
-    case cowboy_req:body_length(Req) of
-    {Length, Req1} when is_integer(Length) and (Length > ?MAX_SIZE) -> 
-		{ok, reply400(Req1, "body is too big."), State}; 
-	{_, Req1} ->
-		{Method, Req2} = cowboy_req:method(Req1),
-		{Path, Req3} = cowboy_req:path(Req2),
-		QsFun = qsfun(Method),
-		{ok, Vals, Req4} = QsFun(Req3),
-		Params = [{b2a(K), V} || {K, V} <- Vals],
-		handle(Req4, Method, Path, Params, State)
-	end.
-	
-qsfun(<<"GET">>) -> 
-	fun(Req) -> {Vals, Req1} = cowboy_req:qs_vals(Req), {ok, Vals, Req1} end;
+loop(Req) ->
+    Method = Req:get(method),
+	?INFO("~s ~s", [Method, Req:get(raw_path)]),
+	Path = list_to_tuple(string:tokens(Req:get(raw_path), "/")),
+	handle(Method, Path, Req).
 
-qsfun(<<"POST">>) ->
-	fun(Req) -> cowboy_req:body_qs(?MAX_SIZE, Req) end.	
+handle('GET', {"rrdb", Key, "last"}, Req) ->
+    folsom_metrics:notify({'http.last', {inc, 1}}),
+	case errdb:last(unquote(Key)) of
+    {ok, Time, Fields, Values} ->
+        Resp = ["TIME:", join(Fields, ","), "\n", errdb_lib:line(Time, Values)],
+        Req:ok({"text/plain", Resp});
+    {error, Reason} ->
+		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
+        Req:respond({500, [], atom_to_list(Reason)})
+	end;
 
-handle(Req, <<"GET">>, <<"/measure">>, Params, State) ->
-    Ip = proplists:get_value(ip, Params),
-	Port = proplists:get_value(port, Params),    
-	ConnOid = #extend104_oid{ip=Ip, port=binary_to_integer(Port)},
-	case extend104:get_conn_pid(ConnOid) of
-	{ok, ConnPid} -> 
-		MeaType = proplists:get_value(measure_type, Params, '$_'),
-		MeaNo = proplists:get_value(measure_no, Params, '_'),
-		{ok, Meas} = extend104_connection:get_measure(ConnPid, {MeaType, MeaNo}),
-		?INFO("get meas:~p", [Meas]),
-		{ok, Reply} = cowboy_req:reply(200, [{"Content-Type", "text/plain"}], format(Meas), Req), 
-		{ok, Reply, State};
-	error ->
-		{ok, Reply} = cowboy_req:reply(400, [{"Content-Type", "text/plain"}], <<"can not find conn">>, Req), 
-		{ok, Reply, State}
-	end;	
+handle('GET', {"rrdb", RawKey, "last", RawFields}, Req) ->
+    folsom_metrics:notify({'http.last', {inc, 1}}),
+	Key = unquote(RawKey),
+	Fields = unquote(RawFields),
+	case errdb:last(Key, tokens(Fields, ",")) of
+    {ok, Time, Values} -> 
+        Resp = ["TIME:", Fields, "\n", errdb_lib:line(Time, Values)],
+        Req:ok({"text/plain", Resp});
+    {error, Reason} ->
+		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
+        Req:respond({500, [], atom_to_list(Reason)})
+	end;
 
-handle(Req, Method, Path, Params, State) ->
-	{Peer, Req1} = cowboy_req:peer(Req),
-    ?ERROR("bad request from ~p: ~p ~p: ~p", [Peer, Method, Path, Params]),
-	{ok, Reply} = cowboy_req:reply(400, [{"Content-Type", "text/plain"}], <<"bad request">>, Req1), 
-	{ok, Reply, State}.
+handle('GET', {"rrdb", RawKey, RawFields, RawRange}, Req) ->
+    folsom_metrics:notify({'http.fetch', {inc, 1}}),
+	Key = unquote(RawKey),
+	Fields = unquote(RawFields),
+	Range = unquote(RawRange),
+    [Begin, End] = tokens(Range, "-"),
+	case errdb:fetch(Key, tokens(Fields, ","),
+        list_to_integer(Begin), list_to_integer(End)) of
+    {ok, Records} -> 
+        Lines = join([errdb_lib:line(Time, Values) || {Time, Values} <- Records], "\n"),
+        Resp = ["TIME:", Fields, "\n", Lines],
+        Req:ok({"text/plain", Resp});
+    {error, Reason} ->
+		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
+        Req:respond({500, [], atom_to_list(Reason)})
+	end;
 
-terminate(_Reason, _Req, _State) ->
-	ok.	
-	
-reply400(Req, Msg) ->
-	{ok, Reply} = cowboy_req:reply(400, [], Msg, Req), 
-	Reply.	
-	
-format(Meas) ->
-	string:join(lists:map(fun(#measure{id=Id, value=V}) ->
-		lists:concat([Id#measure_id.type,'-', Id#measure_id.no,':'])  ++ extend104_util:to_string(V)
-	end, Meas),"\n").
-			
+handle(_Other, _Path, Req) ->
+	Req:respond({404, [], <<"bad request, path not found.">>}). 
