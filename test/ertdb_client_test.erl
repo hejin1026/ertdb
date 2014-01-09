@@ -8,7 +8,7 @@
 run() ->
 	Key = build_key(1, 11, 2),
 	C = c(),
-	config(C, Key, [{compress, 1}, {dev, 8}, {maxtime, 60}, {mintime, 10}]),
+	config(C, Key, [{compress, 1}, {dev, 8}, {his_dev, 16}, {maxtime, 60}, {mintime, 10}, {his_maxtime, 300}]),
 	timer:sleep(20),
 	io:format("rtk config:~p", [ertdb:lookup(Key)]),
 	insert(C, Key, extbif:timestamp(), 123).
@@ -19,7 +19,7 @@ run() ->
 	% Key = ertdb_client_test:build_key(1, 11, 2).
 	% C = ertdb_client_test:c().
 	
-	% ertdb_client_test:config(C, Key, [{compress, 1}, {dev, 8}, {his_dev, 16}, {maxtime, 60}, {mintime, 10}]).
+	% ertdb_client_test:config(C, Key, [{compress, 1}, {dev, 8}, {his_dev, 16}, {maxtime, 60}, {mintime, 10}, {his_maxtime, 300}]).
 	% ertdb:lookup(Key).
 	
 	% ertdb_client_test:insert(C, Key, extbif:timestamp(), 123).

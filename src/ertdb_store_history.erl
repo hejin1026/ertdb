@@ -31,7 +31,7 @@
 
 -define(RTDB_VER, <<"RTDB0001">>).
 
--record(state, {dir, tb, buffer, db}).
+-record(state, {dir, tb, buffer, db, hdb}).
 
 -record(rtd, {key, time, last, ref, row}).
 
@@ -58,7 +58,7 @@ init([]) ->
     %schedule daily rotation
     sched_daily_rotate(),
 	TB = ets:new(rttb_last, [set, {keypos, #rtd.key}]),
-	{ok, #state{dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB}}.
+	{ok, #state{dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB, hdb=dict:new()}}.
 
 open(Dir) ->
 	open(Dir, dbname(extbif:timestamp())).
@@ -81,41 +81,74 @@ open(Dir, Name) ->
 	    eof -> file:write(DataFd, ?RTDB_VER)
     end,
 	{ok, #db{name=Name, index=IdxRef, data=DataFd} }.
+	
+open2(Dir, Name) ->
+	?INFO("open2 file:~p", [Name]),
+	IdxRef = lists:concat([Name, '_index']),
+	IdxFile = lists:concat([Dir, '/', Name, '.idx']),
+	DataFile = lists:concat([Dir, '/', Name, '.data']),
+	case filelib:is_file(DataFile) of
+		false ->
+			filelib:ensure_dir(DataFile);
+		true ->
+			ok
+	end,		
+	case file:open(DataFile, [read | ?OPEN_MODES]) of
+		{ok, DataFd} ->
+			{ok, IdxRef} = dets:open_file(IdxRef, [{file, IdxFile}, {type, bag}]),
+			case file:read(DataFd, 8) of
+			    {ok, ?RTDB_VER} -> ok;
+			    eof -> file:write(DataFd, ?RTDB_VER)
+		    end,	
+			{ok, #db{name=Name, index=IdxRef, data=DataFd} };
+		{error, _}=Error ->
+			Error	
+	end.		
+
+get_idx(Begin, End, #state{dir=Dir, db=DB, hdb=HDB} = State) ->
+	Today = extbif:timestamp(),	
+	{CBegin, CEnd} = check_time(Begin, End, Today),
+	BeginIdx = CBegin div ?DAY, 
+	EndIdx = CEnd div ?DAY,
+	TodayIdx = Today div ?DAY,
+	
+	?INFO("beginidx:~p, endidx:~p", [BeginIdx, EndIdx]),
+	
+	StoreDB = fun(Idx, {DBS, DictHDB}) ->
+				case dict:find(Idx, HDB) of
+					{ok, EDB} ->
+						{[EDB|DBS], DictHDB};
+					error ->
+						case open2(Dir, Idx) of
+							{ok, NDB} -> 
+								{[NDB|DBS], dict:store(Idx, NDB, DictHDB)};
+							{error, _} -> 
+								{DBS, DictHDB}
+						end	
+				end		
+			end,
+	
+	if EndIdx+1 >= TodayIdx ->
+    	{HisDB, NewHDB} = 
+			lists:foldl(StoreDB, {[], HDB}, lists:seq(BeginIdx, TodayIdx-1)),
+		{lists:reverse([DB|HisDB]), State#state{hdb=NewHDB} };
+	true ->
+    	{HisDB, NewHDB} = 
+			lists:foldl(StoreDB, {[], HDB}, lists:seq(BeginIdx, EndIdx+1)),
+		{lists:reverse(HisDB), State#state{hdb=NewHDB} }
+	end.		
+	
 
 sched_daily_rotate() ->
     Now = extbif:timestamp(),
     NextDay = (Now div ?DAY + 1) * ?DAY,
-    %?INFO("will rotate at: ~p", [ertdb_util:datetime(NextDay)]),
+    ?INFO("will rotate at: ~p", [extbif:datetime(NextDay)]),
     Delta = (NextDay + 1 - Now) * 1000,
     erlang:send_after(Delta, self(), rotate).
 	
 dbname(Ts) ->
 	integer_to_list(Ts div ?DAY).	
 
-get_idx(Begin, End, #state{dir=Dir, db = DB}) ->
-	Today = extbif:timestamp(),	
-	CBegin = if Today > Begin ->
-					Begin;
-				true ->
-					Today
-				end,
-	CEnd = if Today > End ->
-					End;
-				true ->
-					Today
-				end,
-	BeginIdx = CBegin div ?DAY, 
-	EndIdx = CEnd div ?DAY,
-	?INFO("beginidx:~p, endidx:~p", [BeginIdx, EndIdx]),
-    DbInRange = 
-		lists:map(fun(Idx) ->
-			{ok, NDB} = open(Dir, Idx), NDB
-		end, lists:seq(BeginIdx, EndIdx-1)),
-	LastDB = 
-	if 	EndIdx == (Today div ?DAY) -> DB;
-		true -> {ok, LDB} = open(Dir, EndIdx), LDB
-	end,
-	[LastDB|lists:reverse(DbInRange)].
 			
 handle_call({lookup, Key}, _From, #state{tb=TB} = State) ->
 	DataE = case ets:lookup(TB, Key) of
@@ -127,7 +160,8 @@ handle_call({lookup, Key}, _From, #state{tb=TB} = State) ->
 	
 handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
     %beginIdx is bigger than endidx
-    DbInRange = get_idx(Begin, End, State),
+    {DbInRange, NewState} = get_idx(Begin, End, State),
+	
 	?INFO("read_idx: ~s ~p", [Key, DbInRange]),	
     IdxList = [{Name, DataFd, [Idx || {_K, Idx} <- dets:lookup(IdxRef, Key)]} 
                     || #db{name=Name, index=IdxRef, data=DataFd} <- DbInRange],
@@ -148,6 +182,7 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
         end
     end, [ E || {_, _, Indices} = E <- IdxList, Indices =/= []]),
 	DataFl = [Rows || {ok, Rows} <- DataF],
+	
 	Today = extbif:timestamp(),	
 	DataList =  
 		if 	(End div ?DAY) == (Today div ?DAY) -> 
@@ -160,7 +195,10 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
 		true -> 
 			DataFl
 	end,
-    {reply, {ok, lists:flatten(DataList)}, State};	
+	
+	DataListF = filter_data(lists:flatten(DataList), Begin, End),
+	
+    {reply, {ok, DataListF}, NewState};	
 
 	
 handle_call(Req, _From, State) ->
@@ -299,6 +337,41 @@ judge([Rule|Rs], Data) ->
 			
 cancel_timer('undefined') -> ok;
 cancel_timer(Ref) -> erlang:cancel_timer(Ref).
-
+	
+	
+check_time(Begin, End, Today) when Begin =< End ->
+	if (Today =< Begin) ->
+		?INFO("Begin:~p", [extbif:datetime(Begin)]),
+		throw(error_time);
+	true ->
+		if Today =< End ->
+			{Begin, Today};
+		true ->
+			{Begin, End}
+		end
+	end;
+check_time(Begin, End, Today) ->
+	check_time(End, Begin, Today).	
+						
+						
+filter_data(DataList, Begin, End) ->
+	?INFO("begin-end:~p, data:~p", [{extbif:datetime(Begin), extbif:datetime(End)}, DataList]),
+	lists:reverse(filter_data_end(lists:reverse(filter_data_begin(DataList, Begin)), End)).						
 		
+filter_data_begin([], _) ->
+	[];		
+filter_data_begin([{Time, Value}|DataList], Begin) when Begin =< Time ->
+	[{Time, Value}|DataList];
+filter_data_begin([_|DataList], Begin) ->	
+	filter_data_begin(DataList, Begin).
+	
+filter_data_end([], _) ->
+	[];	
+filter_data_end([{Time, Value}|DataList], End) when End >= Time ->
+	[{Time, Value}|DataList];	
+filter_data_end([_|DataList], End) ->
+	filter_data_end(DataList, End).	
+	
+	
+			
 			

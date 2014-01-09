@@ -35,9 +35,10 @@ timestamp() ->
 	{MegaSecs, Secs, _MicroSecs} = erlang:now(),
 	MegaSecs * 1000000 + Secs.
 
+%%% TODO g(now) - g(1970) = U + 8小时差
 timestamp({{_Y,_M,_D}, {_H,_MM,_S}} = DateTime) ->
 	Seconds = fun(D) -> calendar:datetime_to_gregorian_seconds(D) end,
-	Seconds(DateTime) - Seconds({{1970,1,1},{0,0,0}}).
+	Seconds(DateTime) - Seconds({{1970,1,1},{8,0,0}}).
 
 microsecs() ->
     {Mega,Sec,Micro} = erlang:now(),
@@ -63,6 +64,7 @@ strftime({{Y,M,D}, {H,MM,S}}) ->
     Time = string:join([zeropad(I) || I <- [H, MM, S]], ":"),
     lists:concat([Date, " ", Time]).
     
+%%% TODO g(now) = g(1970) + U + 8小时差	
 datetime(Seconds) when is_integer(Seconds) ->
     BaseDate = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
     Universal = calendar:gregorian_seconds_to_datetime(BaseDate + Seconds),

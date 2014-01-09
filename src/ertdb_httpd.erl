@@ -64,11 +64,11 @@ handle('GET', {"rtdb", RawKey, RawRange}, Req) ->
 	Range = unquote(RawRange),
     {BeginT, EndT} = case tokens(Range, "-") of
 		[Begin] ->
-			{extbif:timestamp({to_date(Begin), time()}), extbif:timestamp()};	
+			{extbif:timestamp({to_date(Begin), {0,0,0}}), extbif:timestamp()};	
 		[Begin, End] ->
-			{extbif:timestamp({to_date(Begin), time()}), extbif:timestamp({to_date(End), time()})}
+			{extbif:timestamp({to_date(Begin), {0,0,0}}), extbif:timestamp({to_date(End), {0,0,0}})}
 	end,		
-	% ?INFO("begin:~p, end:~p", [BeginT, EndT]),
+	?INFO("begin:~p, end:~p", [extbif:datetime(BeginT), extbif:datetime(EndT)]),
 	case ertdb:fetch(list_to_binary(Key), BeginT, EndT) of
     {ok, Records} -> 
         Lines = join([format_data(Item) || Item <- Records], "\n"),
