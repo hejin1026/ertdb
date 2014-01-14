@@ -33,6 +33,11 @@ run() ->
 	
 	% {ok, [{Name, DataFd, Indices}]} = gen_server:call(ertdb_store_history, {read_idx, Key, extbif:timestamp({{2014,1,6}, time()}), extbif:timestamp()}).
 	% file:pread(DataFd, Indices).
+	
+	
+	% ets:lookup(chash_pg_table, {vnodes, ertdb}).
+	% ets:lookup(chash_pg_table, {local_vnodes, ertdb}).
+	% chash_pg:get_pid(ertdb, Key).
 			
 
 config(C, Key, Data) ->

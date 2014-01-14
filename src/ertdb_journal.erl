@@ -12,7 +12,7 @@
 
 -behavior(gen_server).
 
--export([start_link/0, 
+-export([start_link/1, 
         write/4]).
 
 -export([init/1, 
@@ -23,15 +23,18 @@
         terminate/2,
         code_change/3]).
 
--record(state, {logdir, logfile}).
+-record(state, {id, logdir, logfile}).
 
 %%--------------------------------------------------------------------
 %% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
 %% Description: Starts the server
 %%--------------------------------------------------------------------
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [],
+start_link(Id) ->
+    gen_server:start_link({local, name(Id)}, ?MODULE, [Id],
                 [{spawn_opt, [{min_heap_size, 20480}]}]).
+
+name(Id) ->
+	list_to_atom("errdb_journal" ++ integer_to_list(Id)).		
 
 write(Pid, Key, Time, Value) ->
     gen_server:cast(Pid, {write, Key, Time, Value}).
@@ -43,13 +46,13 @@ write(Pid, Key, Time, Value) ->
 %%                         {stop, Reason}
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
-init([]) ->
+init([Id]) ->
     put(commit_count, 0),
     put(commit_time, 0),
 	random:seed(now()),
     {ok, Opts} = application:get_env(journal),
     Dir = get_value(dir, Opts),
-    State = #state{logdir = Dir},
+    State = #state{id=Id, logdir = Dir},
     {noreply, NewState} = handle_info(journal_rotation, State),
     ?INFO("~p is started.", [ertdb_journal]),
     {ok, NewState}.
@@ -87,12 +90,12 @@ handle_cast(_Msg, State) ->
 %%                                       {stop, Reason, State}
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
-handle_info(journal_rotation, #state{logdir = Dir, logfile = File} = State) ->
+handle_info(journal_rotation, #state{id=Id, logdir = Dir, logfile = File} = State) ->
     close_file(File),
     Now = timestamp(),
     {Hour,_,_} = time(),
     FilePath = lists:concat([Dir, "/", extbif:strfdate(date()), "/", 
-		zeropad(Hour), "/",  "ertdb.journal"]),
+		zeropad(Hour), "/", integer_to_list(Id), ".journal"]),
     filelib:ensure_dir(FilePath),
     {ok, NewFile} = file:open(FilePath, [write]),
     NextHour = ((Now div 3600) + 1) * 3600,

@@ -89,15 +89,20 @@ handle_req(Socket, Data) ->
 	    end
     catch
         Type:Error -> 
-			?ERROR("error config:~p, ~p, ~p", [Type, Error, erlang:get_stacktrace()])
+			?ERROR("error handle req:~p, ~p, ~p", [Type, Error, erlang:get_stacktrace()])
     end.
 
 handle_reply({ok, Data}) when is_list(Data) ->
 	handle_reply(list_to_tuple(Data));
 	
 handle_reply({<<"config">>, Key, Config}) ->
-	KConfig = ertdb:build_config(Key, binary_to_list(Config)),
-	Rest = ertdb:config(KConfig),
+	Rest =  
+		try 
+			ertdb:config(Key, Config)
+		catch Type:Error ->
+			?ERROR("error config:~p, ~p, ~p", [Type, Error, erlang:get_stacktrace()]),
+			{error, "config fail"}	
+		end,		
 	{reply, Rest};	
 			
 
@@ -111,8 +116,7 @@ handle_reply({<<"fetch">>, Key}) ->
 	{reply, Rest};
 	
 handle_reply({<<"fetch">>, Key, Begin, End}) ->
-	{ok, Datalist} =
-	ertdb:fetch(Key, Begin, End),
+	{ok, Datalist} = ertdb:fetch(Key, Begin, End),
 	{reply, Datalist};	
 
 handle_reply(Req) ->

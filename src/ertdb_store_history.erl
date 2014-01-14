@@ -11,12 +11,12 @@
 
 -behavior(gen_server).
 
--export([start_link/0,
+-export([start_link/1,
         read/4, lookup/2,
-        write/5
+        write/4, write/5
 		]).
 		
--export([open/1]).		
+-export([open/2, open/3]).		
 
 -export([init/1, 
         handle_call/3, 
@@ -31,15 +31,21 @@
 
 -define(RTDB_VER, <<"RTDB0001">>).
 
--record(state, {dir, tb, buffer, db, hdb}).
+-record(state, {id, dir, tb, buffer, db, hdb}).
 
 -record(rtd, {key, time, last, ref, row}).
 
 -record(db, {name, index, data}).
 
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [],
+start_link(Id) ->
+    gen_server:start_link({local, name(Id)}, ?MODULE, [Id],
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
+		
+name(Id) ->
+    list_to_atom("errdb_store_history" ++ integer_to_list(Id)).			
+	
+write(Pid, Key, Time, Value) ->
+	gen_server:cast(Pid, {write, Key, Time, Value}).	
 		
 write(Pid, Key, Time, Value, Config) ->
     gen_server:cast(Pid, {write, Key, Time, Value, Config}).
@@ -50,24 +56,25 @@ read(Pid, Key, Begin, End) ->
 lookup(Pid, Key) ->
 	gen_server:call(Pid, {lookup, Key}). 	
 		
-init([]) ->
+init([Id]) ->
 	{ok, Opts} = application:get_env(store),
 	Dir = get_value(dir, Opts, "var/data"),
 	Buffer = get_value(buffer, Opts, 20),
-	{ok, DB} = open(Dir),
+	{ok, DB} = open(Dir, Id),
     %schedule daily rotation
     sched_daily_rotate(),
 	TB = ets:new(rttb_last, [set, {keypos, #rtd.key}]),
-	{ok, #state{dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB, hdb=dict:new()}}.
+	{ok, #state{id=Id, dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB, hdb=dict:new()}}.
 
-open(Dir) ->
-	open(Dir, dbname(extbif:timestamp())).
+open(Dir, Id) ->
+	open(Dir, Id, dbname(extbif:timestamp())).
 
-open(Dir, Name) ->
+open(Dir, Id, Name) ->
 	?INFO("open file:~p", [Name]),
-	IdxRef = lists:concat([Name, '_index']),
-	IdxFile = lists:concat([Dir, '/', Name, '.idx']),
-	DataFile = lists:concat([Dir, '/', Name, '.data']),
+	DbDir = dbdir(Dir, Id),
+	IdxRef = lists:concat([Id, '_', Name, '_index']),
+	IdxFile = lists:concat([DbDir, '/', Name, '.idx']),
+	DataFile = lists:concat([DbDir, '/', Name, '.data']),
 	case filelib:is_file(DataFile) of
 		false ->
 			filelib:ensure_dir(DataFile);
@@ -82,11 +89,12 @@ open(Dir, Name) ->
     end,
 	{ok, #db{name=Name, index=IdxRef, data=DataFd} }.
 	
-open2(Dir, Name) ->
+open2(Dir, Id, Name) ->
 	?INFO("open2 file:~p", [Name]),
-	IdxRef = lists:concat([Name, '_index']),
-	IdxFile = lists:concat([Dir, '/', Name, '.idx']),
-	DataFile = lists:concat([Dir, '/', Name, '.data']),
+	DbDir = dbdir(Dir, Id),
+	IdxRef = lists:concat([Id, '_', Name, '_index']),
+	IdxFile = lists:concat([DbDir, '/', Name, '.idx']),
+	DataFile = lists:concat([DbDir, '/', Name, '.data']),
 	case filelib:is_file(DataFile) of
 		false ->
 			filelib:ensure_dir(DataFile);
@@ -105,12 +113,19 @@ open2(Dir, Name) ->
 			Error	
 	end.		
 
-get_idx(Begin, End, #state{dir=Dir, db=DB, hdb=HDB} = State) ->
+dbdir(Dir, Id) ->	
+	lists:concat([Dir, "/", extbif:zeropad(Id)]).
+	
+dbname(Ts) ->
+	(Ts div ?DAY).		
+	
+
+get_idx(Begin, End, #state{id=Id, dir=Dir, db=DB, hdb=HDB} = State) ->
 	Today = extbif:timestamp(),	
 	{CBegin, CEnd} = check_time(Begin, End, Today),
-	BeginIdx = CBegin div ?DAY, 
-	EndIdx = CEnd div ?DAY,
-	TodayIdx = Today div ?DAY,
+	BeginIdx = dbname(CBegin), 
+	EndIdx = dbname(CEnd),
+	TodayIdx = dbname(Today),
 	
 	?INFO("beginidx:~p, endidx:~p", [BeginIdx, EndIdx]),
 	
@@ -119,7 +134,7 @@ get_idx(Begin, End, #state{dir=Dir, db=DB, hdb=HDB} = State) ->
 					{ok, EDB} ->
 						{[EDB|DBS], DictHDB};
 					error ->
-						case open2(Dir, Idx) of
+						case open2(Dir, Id, Idx) of
 							{ok, NDB} -> 
 								{[NDB|DBS], dict:store(Idx, NDB, DictHDB)};
 							{error, _} -> 
@@ -145,9 +160,6 @@ sched_daily_rotate() ->
     ?INFO("will rotate at: ~p", [extbif:datetime(NextDay)]),
     Delta = (NextDay + 1 - Now) * 1000,
     erlang:send_after(Delta, self(), rotate).
-	
-dbname(Ts) ->
-	integer_to_list(Ts div ?DAY).	
 
 			
 handle_call({lookup, Key}, _From, #state{tb=TB} = State) ->
@@ -197,7 +209,6 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
 	end,
 	
 	DataListF = filter_data(lists:flatten(DataList), Begin, End),
-	
     {reply, {ok, DataListF}, NewState};	
 
 	
@@ -205,6 +216,24 @@ handle_call(Req, _From, State) ->
     ?ERROR("badreq: ~p", [Req]),
     {stop, {error, {bagreq, Req}}, State}.		
 	
+handle_cast({write, Key, Time, Value}, 
+		#state{tb=TB, db=DB, buffer=Buffer} = State) ->	
+	?INFO("his noconfig write key:~p, time:~p, value:~p", [Key, Time, Value]),	
+	case ets:lookup(TB, Key) of
+		[] ->
+			Rtd =#rtd{key=Key,time=Time,last=Value,row=[{Time,Value}]},
+			ets:insert(TB, Rtd);
+		[#rtd{row=Rows}] ->	
+			NewRtData = #rtd{key=Key,time=Time,last=Value},
+			if length(Rows)+1 >= Buffer ->
+				flush_to_disk(DB, Key, Rows),
+				ets:insert(TB, NewRtData#rtd{row=[]});
+			true ->
+				ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
+			end
+	end,		
+	{noreply, State};	
+		
 		
 handle_cast({write, Key, Time, Value, #rtk_config{compress=Compress, his_maxtime=Maxtime}=Config}, 
 		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
@@ -270,8 +299,8 @@ handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer} = State) ->
 	end,	
 	{noreply, State};
 		
-handle_info(rotate, #state{dir=Dir, db=DB} = State) ->
-    {ok, NewDB} = open(Dir),
+handle_info(rotate, #state{id=Id, dir=Dir, db=DB} = State) ->
+    {ok, NewDB} = open(Dir, Id),
     %close oldest db
     close(DB),
     %rotation 

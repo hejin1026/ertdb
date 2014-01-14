@@ -4,8 +4,6 @@
 %%%----------------------------------------------------------------------
 -module(ertdb_store_current).
 
--import(extbif, [zeropad/1]).
-
 -import(lists, [concat/1, reverse/1]).
 
 -import(proplists, [get_value/3]).
@@ -15,7 +13,7 @@
 
 -behavior(gen_server).
 
--export([start_link/0,
+-export([start_link/2,
         write/4,
 		read/2
 		]).
@@ -27,13 +25,16 @@
         terminate/2,
         code_change/3]).
 
--record(state, {rttb}).
+-record(state, {id, rttb, his_story}).
 
 -record(rtd, {key, time, value, ref}).
 
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [],
+start_link(HisStore, Id) ->
+    gen_server:start_link({local, name(Id)}, ?MODULE, [HisStore, Id],
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
+		
+name(Id) ->
+    list_to_atom("errdb_store_current" ++ integer_to_list(Id)).		
 		
 write(Pid, Key, Time, Value) ->
     gen_server:cast(Pid, {write, Key, Time, Value}).
@@ -41,9 +42,9 @@ write(Pid, Key, Time, Value) ->
 read(Pid, Key) ->
 	gen_server:call(Pid, {read, Key}).	
 		
-init([]) ->
+init([HisStore, Id]) ->
     RTTB = ets:new(rttb, [set, {keypos, #rtd.key}]),
-    {ok, #state{rttb = RTTB}}.
+    {ok, #state{id=Id, rttb = RTTB, his_story=HisStore}}.
 	
 handle_call({read, Key}, _From, #state{rttb = Rttb} = State) ->
 	Res = case ets:lookup(Rttb, Key) of
@@ -58,11 +59,18 @@ handle_call(Req, _From, State) ->
     {stop, {error, {bagreq, Req}}, State}.		
 	
 		
-handle_cast({write, Key, Time, Value}, #state{rttb = Rttb} = State) ->
-	?INFO("cur write:~p, ~p,~p", [Key, Time, Value]),
+handle_cast({write, Key, Time, Value}, #state{rttb=Rttb, his_story=HisStory} = State) ->
+	?INFO("cur write:~p, ~p, ~p,~p", [State#state.id, Key, Time, Value]),
 	case ertdb:lookup(Key) of
 		[] -> 
+			case ets:lookup(Rttb, Key) of
+				[] -> 
+					ok;
+				[#rtd{time=LastTime, value=LastValue}] ->	
+					ertdb_store_history:write(HisStory, Key, LastTime, LastValue)
+			end,	
 			ets:insert(Rttb, #rtd{key=Key,time=Time,value=Value});
+			
 		[#rtk_config{maxtime=Maxtime} = Config] ->
 			case ets:lookup(Rttb, Key) of
 				[] ->
@@ -76,7 +84,7 @@ handle_cast({write, Key, Time, Value}, #state{rttb = Rttb} = State) ->
 							cancel_timer(LastRef),
 							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 							NewRtData = #rtd{key=Key,time=Time,value=Value,ref=Ref},
-							ertdb_store_history:write(ertdb_store_history, Key, LastTime, LastValue, Config),
+							ertdb_store_history:write(HisStory, Key, LastTime, LastValue, Config),
 							ets:insert(Rttb, NewRtData);
 						false ->
 							?INFO("cur filte data:~p", [{new, Time, Value}]),
@@ -90,7 +98,7 @@ handle_cast(Msg, State) ->
     ?ERROR("badmsg: ~p", [Msg]),
     {noreply, State}.
 	
-handle_info({maxtime, Key}, #state{rttb = Rttb} = State) ->
+handle_info({maxtime, Key}, #state{rttb=Rttb, his_story=HisStory} = State) ->
 	[#rtk_config{maxtime=Maxtime}=Config] = ertdb:lookup(Key),
 	case ets:lookup(Rttb, Key) of
 		[] ->
@@ -100,7 +108,7 @@ handle_info({maxtime, Key}, #state{rttb = Rttb} = State) ->
 			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 			Time = extbif:timestamp(),
 			true = ets:insert(Rttb, LastRtd#rtd{time=Time, ref=Ref}),
-			ertdb_store_history:write(ertdb_store_history, Key, LastTime, Value, Config)
+			ertdb_store_history:write(HisStory, Key, LastTime, Value, Config)
 	end,	
 	{noreply, State};
 		
