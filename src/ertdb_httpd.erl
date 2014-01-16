@@ -100,6 +100,9 @@ format_data({Time, Value}) ->
 format_data(Data) ->
 	Data.		
 	
+
+to_string(T)  ->
+    lists:flatten(io_lib:format("~p", [T])).		
 	
 	
 	

@@ -52,7 +52,7 @@ init() ->
 %% of a response
 parse(#pstate{state = undefined} = State, NewData) ->
     %% Look at the first byte to get the type of reply
-	?INFO("get data:~p", [NewData]),
+	% ?INFO("get data:~p", [NewData]),
     case NewData of
         %% Status
         <<$+, Data/binary>> ->
@@ -77,7 +77,7 @@ parse(#pstate{state = undefined} = State, NewData) ->
         _ ->
             %% TODO: Handle the case where we start parsing a new
             %% response, but cannot make any sense of it
-            {error, unknown_response}
+            exit(unknown_response)
     end;
 
 %% The following clauses all match on different continuation states
@@ -180,8 +180,12 @@ parse_bulk(<<$$, _/binary>> = Data) ->
                     {ok, undefined, Rest};
                 %% We have enough data for the entire bulk
                 size(Bulk) - (size(<<?NL>>) * 2) >= IntSize ->
-                    <<?NL, Value:IntSize/binary, ?NL, Rest/binary>> = Bulk,
-                    {ok, Value, Rest};
+					case Bulk of
+                    	<<?NL, Value:IntSize/binary, ?NL, Rest/binary>> ->
+                    		{ok, Value, Rest};
+						_ ->
+							exit("packet num error")	
+					end;		
                 true ->
                     %% Need more data, so we send the bulk without the
                     %% size specifier to our future self

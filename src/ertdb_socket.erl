@@ -48,7 +48,7 @@ recvloop(Socket, ParserState) ->
 	    end.	
 		
 mainloop(Socket, ParserState, Data) ->
-    case ertdb_parser:parse(ParserState, Data) of
+    try ertdb_parser:parse(ParserState, Data) of
         %% Got complete response, return value to client
         {ReturnCode, Value, NewParserState} ->
             handle_req(Socket, {ReturnCode, Value}),
@@ -65,6 +65,12 @@ mainloop(Socket, ParserState, Data) ->
         %% we have more data
         {continue, NewParserState} ->
             recvloop(Socket, NewParserState)
+	catch 
+		exit:Reason ->
+	        ?ERROR("packet error...:~p", [Reason]),
+			gen_tcp:send(Socket, build_response({error, Reason})),
+			timer:sleep(100),
+	        close(Socket)
     end.		
 
 close(Socket) ->
@@ -74,23 +80,24 @@ close(Socket) ->
 
 	
 handle_req(Socket, Data) ->	
-	try
-	    case handle_reply(Data) of
-			{reply, Reply} ->
-				Frame = build_response(Reply),
-				case gen_tcp:send(Socket, Frame) of
+	case handle_reply(Data) of
+		{reply, Reply} ->
+			try
+				Packet = build_response(Reply),
+				case gen_tcp:send(Socket, Packet) of
 					ok -> ok;
 					_ -> exit(normal)
-				end;
-			noreply ->
-				ok;
-			{stop, _Err} ->
-				close(Socket)
-	    end
-    catch
-        Type:Error -> 
-			?ERROR("error handle req:~p, ~p, ~p", [Type, Error, erlang:get_stacktrace()])
+				end
+		    catch
+		        Type:Error -> 
+					?ERROR("error reply:~p, ~p, ~p", [Type, Error, erlang:get_stacktrace()])
+		    end;
+		noreply ->
+			ok;
+		{stop, _Err} ->
+			close(Socket)
     end.
+    
 
 handle_reply({ok, Data}) when is_list(Data) ->
 	handle_reply(list_to_tuple(Data));
