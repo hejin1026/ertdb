@@ -51,7 +51,27 @@ write(Pid, Key, Time, Value, Config) ->
     gen_server:cast(Pid, {write, Key, Time, Value, Config}).
 	
 read(Pid, Key, Begin, End) ->
-    gen_server:call(Pid, {read, Key, Begin, End}). 
+	case check_time(Begin, End) of
+		false ->
+			{ok, []};
+		{CBegin, CEnd} ->		
+    		gen_server:call(Pid, {read, Key, CBegin, CEnd})
+	end.		
+	
+check_time(Begin, End) when Begin =< End ->
+	Today = extbif:timestamp(),	
+	if (Today =< Begin) ->
+		?ERROR("Begin:~p > now", [extbif:datetime(Begin)]),
+		false;
+	true ->
+		if Today =< End ->
+			{Begin, Today};
+		true ->
+			{Begin, End}
+		end
+	end;
+check_time(Begin, End) ->
+	check_time(End, Begin).		
 	
 lookup(Pid, Key) ->
 	gen_server:call(Pid, {lookup, Key}). 	
@@ -122,9 +142,8 @@ dbname(Ts) ->
 
 get_idx(Begin, End, #state{id=Id, dir=Dir, db=DB, hdb=HDB} = State) ->
 	Today = extbif:timestamp(),	
-	{CBegin, CEnd} = check_time(Begin, End, Today),
-	BeginIdx = dbname(CBegin), 
-	EndIdx = dbname(CEnd),
+	BeginIdx = dbname(Begin), 
+	EndIdx = dbname(End),
 	TodayIdx = dbname(Today),
 	
 	?INFO("beginidx:~p, endidx:~p", [BeginIdx, EndIdx]),
@@ -175,8 +194,8 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
     {DbInRange, NewState} = get_idx(Begin, End, State),
 	
 	?INFO("read_idx: ~s ~p", [Key, DbInRange]),	
-    IdxList = [{Name, DataFd, [Idx || {_K, BeginT, Idx} <- dets:lookup(IdxRef, Key), BeginT =< End]} 
-                    || #db{name=Name, index=IdxRef, data=DataFd} <- DbInRange],
+    IdxList = [{Name, DataFd, filter_idx(dets:lookup(IdxRef, Key), Begin, End)} 
+				|| #db{name=Name, index=IdxRef, data=DataFd} <- DbInRange],
 		
     ?INFO("do read: ~p, ~p", [Key, IdxList]),
     DataF = lists:map(fun({Name, DataFd, Indices}) -> 
@@ -203,6 +222,7 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
 				[#rtd{row=Rows}] ->
 					lists:reverse(Rows)
 			end,
+			?INFO("his memory:~p", [DataE]),
 			lists:append([DataFl, DataE]);
 		true -> 
 			DataFl
@@ -371,20 +391,20 @@ judge([Rule|Rs], Data) ->
 cancel_timer('undefined') -> ok;
 cancel_timer(Ref) -> erlang:cancel_timer(Ref).
 	
-	
-check_time(Begin, End, Today) when Begin =< End ->
-	if (Today =< Begin) ->
-		?ERROR("Begin:~p", [extbif:datetime(Begin)]),
-		throw(error_time);
-	true ->
-		if Today =< End ->
-			{Begin, Today};
-		true ->
-			{Begin, End}
-		end
-	end;
-check_time(Begin, End, Today) ->
-	check_time(End, Begin, Today).	
+						
+filter_idx(IdxList, Begin, End) ->
+	?INFO("get his dataindex: ~p", [IdxList]),	
+	F = fun({_,T,_}, {_,T2,_}) -> T > T2 end,
+	filter_idx(lists:sort(F, IdxList), Begin, End, []).
+
+filter_idx([], Begin, End, Acc) ->
+	Acc;
+filter_idx([{_K, BeginT, Idx}|Rest], Begin, End, Acc) when BeginT > End->
+	filter_idx(Rest, Begin, End, Acc);
+filter_idx([{_K, BeginT, Idx}|Rest], Begin, End, Acc) when BeginT > Begin, BeginT =< End ->
+	filter_idx(Rest, Begin, End, [Idx|Acc]);
+filter_idx([{_K, BeginT, Idx}|_], Begin, End, Acc) when BeginT =< Begin ->
+	[Idx|Acc].
 						
 						
 filter_data(DataList, Begin, End) ->
