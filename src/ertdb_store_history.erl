@@ -42,7 +42,7 @@ start_link(Id) ->
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
-    list_to_atom("errdb_store_history" ++ integer_to_list(Id)).			
+    list_to_atom("ertdb_store_history" ++ integer_to_list(Id)).			
 	
 write(Pid, Key, Time, Value) ->
 	gen_server:cast(Pid, {write, Key, Time, Value}).	
@@ -175,10 +175,10 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
     {DbInRange, NewState} = get_idx(Begin, End, State),
 	
 	?INFO("read_idx: ~s ~p", [Key, DbInRange]),	
-    IdxList = [{Name, DataFd, [Idx || {_K, Idx} <- dets:lookup(IdxRef, Key)]} 
+    IdxList = [{Name, DataFd, [Idx || {_K, BeginT, Idx} <- dets:lookup(IdxRef, Key), BeginT =< End]} 
                     || #db{name=Name, index=IdxRef, data=DataFd} <- DbInRange],
 		
-    % ?INFO("do read: ~p, ~p", [Key, IdxList]),
+    ?INFO("do read: ~p, ~p", [Key, IdxList]),
     DataF = lists:map(fun({Name, DataFd, Indices}) -> 
 		% DataFile = lists:concat(["var/data", '/', Name, '.data']),		
 		% {ok, DataFd} = file:open(DataFile, [read, write, append | ?OPEN_MODES]),
@@ -244,9 +244,9 @@ handle_cast({write, Key, Time, Value, #rtk_config{compress=Compress, his_maxtime
 			Rtd =#rtd{key=Key,time=Time,last=Value,ref=Ref,row=[{Time,Value}]},
 			ets:insert(TB, Rtd);
 		[#rtd{time=LastTime, last=LastValue,ref=LastRef, row=Rows}] ->
-			case Compress of
-				"1" ->
-					case check({last, LastTime, LastValue}, {new, Time, Value}, Config) of
+			case check_compress(Compress) of
+				true ->
+					case check_store({last, LastTime, LastValue}, {new, Time, Value}, Config) of
 						true ->
 							?INFO("his pass data:~p", [{new, Time, Value}]),
 							cancel_timer(LastRef),			
@@ -262,7 +262,7 @@ handle_cast({write, Key, Time, Value, #rtk_config{compress=Compress, his_maxtime
 							?INFO("his filte data:~p", [{new, Time, Value}]),
 							ok
 					end;
-				_ ->
+				false ->
 					cancel_timer(LastRef),			
 					Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 					NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
@@ -324,8 +324,9 @@ code_change(_OldVsn, State, _Extra) ->
 flush_to_disk(#db{index=IdxRef,  data=DataFd}, Key, Rows) ->
     {ok, Pos} = file:position(DataFd, eof),
     Data = term_to_binary(lists:reverse(Rows), [compressed]),
-    Idx = {Key, {Pos, size(Data)}},
-    ?INFO("Pos: ~p, LastPos: ~p, Size: ~p", [Pos, Pos, size(Data)]),
+	[{Time, _}|_] = lists:reverse(Rows),
+    Idx = {Key, Time, {Pos, size(Data)}},
+    ?INFO("BeginT:~p, Pos: ~p, Size: ~p", [Time, Pos, size(Data)]),
     case file:write(DataFd, Data) of
     ok ->
         ?INFO("write indices: ~p", [Idx]),
@@ -338,14 +339,17 @@ close(undefined) -> ok;
 close(#db{index=IdxRef, data=DataFd}) ->
     dets:close(IdxRef),
     file:close(DataFd).	
+	
+check_compress(Compress) ->
+	Compress == "1" .	
 
 
-check({last, Lastime, _LastValue}, {new, Time, _Value}, #rtk_config{his_dev=undefined, his_mintime=Mintime, his_maxtime=Maxtime}) ->
+check_store({last, Lastime, _LastValue}, {new, Time, _Value}, #rtk_config{his_dev=undefined, his_mintime=Mintime, his_maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
 	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
 	judge([Rule], [{interval, Interval}]);
 
-check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{his_dev=Dev, his_mintime=Mintime, his_maxtime=Maxtime}) ->
+check_store({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{his_dev=Dev, his_mintime=Mintime, his_maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
 	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
 	Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
@@ -370,7 +374,7 @@ cancel_timer(Ref) -> erlang:cancel_timer(Ref).
 	
 check_time(Begin, End, Today) when Begin =< End ->
 	if (Today =< Begin) ->
-		?INFO("Begin:~p", [extbif:datetime(Begin)]),
+		?ERROR("Begin:~p", [extbif:datetime(Begin)]),
 		throw(error_time);
 	true ->
 		if Today =< End ->

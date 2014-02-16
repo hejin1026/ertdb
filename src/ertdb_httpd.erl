@@ -34,6 +34,18 @@ loop(Req) ->
 		Req:respond({404, [], <<"catch exception">>})
 	end.		
 
+
+handle('GET', {"rtdb.json", Key}, Req) ->
+	% ?INFO("get key:~p, ~p", [Key, unquote(Key)]),
+	case ertdb:fetch(list_to_binary(unquote(Key))) of
+    {ok, {Time, Value}} ->
+        Resp = [{time, Time}, {value, Value}],
+        Req:ok({"text/plain", jsonify(Resp)});
+    {error, Reason} ->
+		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
+        Req:respond({500, [], atom_to_list(Reason)})
+	end;
+
 handle('GET', {"rtdb", Key}, Req) ->
 	% ?INFO("get key:~p, ~p", [Key, unquote(Key)]),
 	case ertdb:fetch(list_to_binary(unquote(Key))) of
@@ -64,9 +76,9 @@ handle('GET', {"rtdb", RawKey, RawRange}, Req) ->
 	Range = unquote(RawRange),
     {BeginT, EndT} = case tokens(Range, "-") of
 		[Begin] ->
-			{extbif:timestamp({to_date(Begin), {0,0,0}}), extbif:timestamp()};	
+			{extbif:timestamp(to_datetime(Begin)), extbif:timestamp()};	
 		[Begin, End] ->
-			{extbif:timestamp({to_date(Begin), {0,0,0}}), extbif:timestamp({to_date(End), {0,0,0}})}
+			{extbif:timestamp(to_datetime(Begin)), extbif:timestamp(to_datetime(End))}
 	end,		
 	?INFO("begin:~p, end:~p", [extbif:datetime(BeginT), extbif:datetime(EndT)]),
 	case ertdb:fetch(list_to_binary(Key), BeginT, EndT) of
@@ -78,22 +90,30 @@ handle('GET', {"rtdb", RawKey, RawRange}, Req) ->
 		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
         Req:respond({500, [], atom_to_list(Reason)})
 	end;
+	
 
 handle(_Other, _Path, Req) ->
 	Req:respond({404, [], <<"bad request, path not found.">>}). 
 	
-to_date(StrfDatetime) when is_list(StrfDatetime)->
+to_datetime(StrfDatetime) when is_list(StrfDatetime), length(StrfDatetime) >= 8->
 	case length(StrfDatetime) of
 		8 ->
 			Y = string:sub_string(StrfDatetime, 1, 4),
 			M = string:sub_string(StrfDatetime, 5, 6),
 			D = string:sub_string(StrfDatetime, 7, 8),
-			{list_to_integer(Y), list_to_integer(M), list_to_integer(D)};
+			{{list_to_integer(Y), list_to_integer(M), list_to_integer(D)}, {0,0,0}};
+		14 ->
+			Y = string:sub_string(StrfDatetime, 1, 4),
+			M = string:sub_string(StrfDatetime, 5, 6),
+			D = string:sub_string(StrfDatetime, 7, 8),
+			H = string:sub_string(StrfDatetime, 9, 10),
+			MM = string:sub_string(StrfDatetime, 11, 12),
+			S =	string:sub_string(StrfDatetime, 13, 14), 
+			{{list_to_integer(Y), list_to_integer(M), list_to_integer(D)}, 
+				{list_to_integer(H), list_to_integer(MM), list_to_integer(S)}};
 		_ ->
-			throw({unknow_date, StrfDatetime})
-	end;			
-to_date({_,_,_}=Date) ->
-	Date.			
+			to_datetime(string:left(StrfDatetime, 14, $0))
+	end.			
 	
 format_data({Time, Value}) ->
 	lists:concat([extbif:strftime(extbif:datetime(Time)), " ==> ", binary_to_list(Value)]);
@@ -104,7 +124,9 @@ format_data(Data) ->
 to_string(T)  ->
     lists:flatten(io_lib:format("~p", [T])).		
 	
-	
+jsonify(Term) ->
+    Encoder = mochijson2:encoder([]),
+    list_to_binary(Encoder(Term)).	
 	
 	
 	

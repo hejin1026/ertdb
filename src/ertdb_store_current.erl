@@ -34,7 +34,7 @@ start_link(HisStore, Id) ->
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
-    list_to_atom("errdb_store_current" ++ integer_to_list(Id)).		
+    list_to_atom("ertdb_store_current" ++ integer_to_list(Id)).		
 		
 write(Pid, Key, Time, Value) ->
     gen_server:cast(Pid, {write, Key, Time, Value}).

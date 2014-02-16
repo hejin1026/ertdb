@@ -59,7 +59,7 @@ fetch(Key, Begin, End) ->
 		
 	
 init([Id]) ->
-	
+	process_flag(trap_exit, true),
     %start store process
 	{ok, HisStore} = ertdb_store_history:start_link(Id),
     {ok, CurStore} = ertdb_store_current:start_link(HisStore, Id),
@@ -112,6 +112,10 @@ handle_cast({insert, Key, Time, Value}, #state{journal=Journal, cur_store=CurSto
 handle_cast(Msg, State) ->
     ?ERROR("badmsg: ~p", [Msg]),
     {noreply, State}.
+
+handle_info({'EXIT', Pid, Reason}, State) ->
+	?ERROR("unormal exit message received: ~p, ~p", [Pid, Reason]),
+	{noreply, State};
 	
 handle_info(Info, State) ->
     ?ERROR("badinfo: ~p", [Info]),
