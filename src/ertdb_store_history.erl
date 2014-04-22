@@ -13,7 +13,7 @@
 
 -export([start_link/1,
         read/4, lookup/2,
-        write/4, write/5
+        write/5, write/6
 		]).
 		
 -export([open/2, open/3]).		
@@ -33,7 +33,7 @@
 
 -record(state, {id, dir, tb, buffer, db, hdb}).
 
--record(rtd, {key, time, last, ref, row}).
+-record(rtd, {key, time, quality, last, row}).
 
 -record(db, {name, index, data}).
 
@@ -44,11 +44,11 @@ start_link(Id) ->
 name(Id) ->
     list_to_atom("ertdb_store_history" ++ integer_to_list(Id)).			
 	
-write(Pid, Key, Time, Value) ->
-	gen_server:cast(Pid, {write, Key, Time, Value}).	
+write(Pid, Key, Time, Quality, Value) ->
+	gen_server:cast(Pid, {write, Key, Time, Quality, Value}).	
 		
-write(Pid, Key, Time, Value, Config) ->
-    gen_server:cast(Pid, {write, Key, Time, Value, Config}).
+write(Pid, Key, Time, Quality, Value, Config) ->
+    gen_server:cast(Pid, {write, Key, Time, Quality, Value, Config}).
 	
 read(Pid, Key, Begin, End) ->
 	case check_time(Begin, End) of
@@ -236,62 +236,59 @@ handle_call(Req, _From, State) ->
     ?ERROR("badreq: ~p", [Req]),
     {stop, {error, {bagreq, Req}}, State}.		
 	
-handle_cast({write, Key, Time, Value}, 
+handle_cast({write, Key, Time, Quality, Value}, 
 		#state{tb=TB, db=DB, buffer=Buffer} = State) ->	
 	?INFO("his noconfig write key:~p, time:~p, value:~p", [Key, Time, Value]),	
+				
 	case ets:lookup(TB, Key) of
 		[] ->
-			Rtd =#rtd{key=Key,time=Time,last=Value,row=[{Time,Value}]},
+			Rtd =#rtd{key=Key,time=Time,quality=Quality,last=Value,row=[{Time,Quality,Value}]},
 			ets:insert(TB, Rtd);
 		[#rtd{row=Rows}] ->	
-			NewRtData = #rtd{key=Key,time=Time,last=Value},
-			if length(Rows)+1 >= Buffer ->
-				flush_to_disk(DB, Key, Rows),
-				ets:insert(TB, NewRtData#rtd{row=[]});
-			true ->
-				ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
-			end
-	end,		
-	{noreply, State};	
-		
-		
-handle_cast({write, Key, Time, Value, #rtk_config{compress=Compress, his_maxtime=Maxtime}=Config}, 
-		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
-	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
-	case ets:lookup(TB, Key) of
-		[] -> 
-			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-			Rtd =#rtd{key=Key,time=Time,last=Value,ref=Ref,row=[{Time,Value}]},
-			ets:insert(TB, Rtd);
-		[#rtd{time=LastTime, last=LastValue,ref=LastRef, row=Rows}] ->
-			case check_compress(Compress) of
-				true ->
-					case check_store({last, LastTime, LastValue}, {new, Time, Value}, Config) of
-						true ->
-							?INFO("his pass data:~p", [{new, Time, Value}]),
-							cancel_timer(LastRef),			
-							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-							NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
+			InsertFun = fun() ->
+							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value},
 							if length(Rows)+1 >= Buffer ->
 								flush_to_disk(DB, Key, Rows),
 								ets:insert(TB, NewRtData#rtd{row=[]});
 							true ->
-								ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
-							end;	 	
+								ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows]})
+							end
+						end,
+			InsertFun()
+	end,		
+	{noreply, State};	
+		
+		
+handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress}=Config}, 
+		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
+	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
+	case ets:lookup(TB, Key) of
+		[] -> 
+			Rtd =#rtd{key=Key,time=Time,quality=Quality,last=Value,row=[{Time,Quality,Value}]},
+			ets:insert(TB, Rtd);
+		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, row=Rows}] ->
+			InsertFun = fun() ->
+							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value},
+							if length(Rows)+1 >= Buffer ->
+								flush_to_disk(DB, Key, Rows),
+								ets:insert(TB, NewRtData#rtd{row=[]});
+							true ->
+								ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows]})
+							end
+						end,	
+			
+			case check_compress(Compress) of
+				true ->
+					case check_store({last, LastTime, LastQuality, LastValue}, {new, Time, Quality, Value}, Config) of
+						true ->
+							?INFO("his pass data:~p", [{new, Time, Value}]),
+							InsertFun();
 						false ->
-							?INFO("his filte data:~p", [{new, Time, Value}]),
+							?INFO("his filte data:~p", [{new, Time, Quality, Value}]),
 							ok
 					end;
 				false ->
-					cancel_timer(LastRef),			
-					Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-					NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
-					if length(Rows)+1 >= Buffer ->
-						flush_to_disk(DB, Key, [{Time,Value}|Rows]),
-						ets:insert(TB, NewRtData#rtd{row=[]});
-					true ->
-						ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
-					end
+					InsertFun()
 			end						
 	end,
 	{noreply, State};		
@@ -300,24 +297,6 @@ handle_cast(Msg, State) ->
     ?ERROR("badmsg: ~p", [Msg]),
     {noreply, State}.
 
-handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer} = State) ->
-	[#rtk_config{his_maxtime=Maxtime}] = ertdb:lookup(Key),
-	case ets:lookup(TB, Key) of
-		[] ->
-			throw({no_key, Key});
-		[#rtd{last=Value, row=Rows}] ->
-			?INFO("his maxtime data:~p", [{Key, Value}]),			
-			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-			Time = extbif:timestamp(),
-			NewRtData = #rtd{key=Key,time=Time,last=Value,ref=Ref},
-			if length(Rows)+1 >= Buffer ->
-				flush_to_disk(DB, Key, [{Time,Value}|Rows]),
-				ets:insert(TB, NewRtData#rtd{row=[]});
-			true ->
-				ets:insert(TB, NewRtData#rtd{row=[{Time,Value}|Rows]})
-			end
-	end,	
-	{noreply, State};
 		
 handle_info(rotate, #state{id=Id, dir=Dir, db=DB} = State) ->
     {ok, NewDB} = open(Dir, Id),
@@ -344,7 +323,7 @@ code_change(_OldVsn, State, _Extra) ->
 flush_to_disk(#db{index=IdxRef,  data=DataFd}, Key, Rows) ->
     {ok, Pos} = file:position(DataFd, eof),
     Data = term_to_binary(lists:reverse(Rows), [compressed]),
-	[{Time, _}|_] = lists:reverse(Rows),
+	[{Time, _, _}|_] = lists:reverse(Rows),
     Idx = {Key, Time, {Pos, size(Data)}},
     ?INFO("BeginT:~p, Pos: ~p, Size: ~p", [Time, Pos, size(Data)]),
     case file:write(DataFd, Data) of
@@ -364,33 +343,41 @@ check_compress(Compress) ->
 	Compress == "1" .	
 
 
-check_store({last, Lastime, _LastValue}, {new, Time, _Value}, #rtk_config{his_dev=undefined, his_mintime=Mintime, his_maxtime=Maxtime}) ->
+check_store({last, Lastime, LastQuality, LastValue}, {new, Time, Quality, Value}, 
+		#rtk_config{his_dev=Dev, his_mintime=Mintime, his_maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
-	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
-	judge([Rule], [{interval, Interval}]);
-
-check_store({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{his_dev=Dev, his_mintime=Mintime, his_maxtime=Maxtime}) ->
-	Interval = Time - Lastime,
-	Rule = lists:concat(["&(> interval ", Mintime,")(< interval ", Maxtime, ")"]),
-	Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
-	Rule2 = lists:concat(["> deviation ", Dev]),	
-	judge([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}]).
-		
 	
-judge([], _Data) ->	
+	if (Interval >= Maxtime) or (LastQuality =/= Quality) ->
+		true;
+	true ->
+		Rule = lists:concat(["> interval ", Mintime]),
+		Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
+		Rule2 = lists:concat(["> deviation ", LastValue * Dev]),	
+		judge_and([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}])
+	end.	
+
+judge_or([], _Data) ->
 	true;
-judge([Rule|Rs], Data) ->
+judge_or([Rule|Rs], Data) ->	
 	{ok, Exp} = prefix_exp:parse(Rule),
 	case prefix_exp:eval(Exp, Data) of
-		true -> judge(Rs, Data);
+		false -> judge_or(Rs, Data);
+		true -> 
+			?INFO("judge false :~p, ~p",[Rule, Data]),
+			true
+	end.	
+	
+judge_and([], _Data) ->	
+	true;
+judge_and([Rule|Rs], Data) ->
+	{ok, Exp} = prefix_exp:parse(Rule),
+	case prefix_exp:eval(Exp, Data) of
+		true -> judge_and(Rs, Data);
 		false -> 
 			?INFO("judge false :~p, ~p",[Rule, Data]),
 			false
 	end.	
 			
-cancel_timer('undefined') -> ok;
-cancel_timer(Ref) -> erlang:cancel_timer(Ref).
-	
 						
 filter_idx(IdxList, Begin, End) ->
 	?INFO("get his dataindex: ~p", [IdxList]),	
@@ -413,15 +400,15 @@ filter_data(DataList, Begin, End) ->
 		
 filter_data_begin([], _) ->
 	[];		
-filter_data_begin([{Time, Value}|DataList], Begin) when Begin =< Time ->
-	[{Time, Value}|DataList];
+filter_data_begin([{Time, Quality, Value}|DataList], Begin) when Begin =< Time ->
+	[{Time, Quality, Value}|DataList];
 filter_data_begin([_|DataList], Begin) ->	
 	filter_data_begin(DataList, Begin).
 	
 filter_data_end([], _) ->
 	[];	
-filter_data_end([{Time, Value}|DataList], End) when End >= Time ->
-	[{Time, Value}|DataList];	
+filter_data_end([{Time, Quality, Value}|DataList], End) when End >= Time ->
+	[{Time, Quality, Value}|DataList];	
 filter_data_end([_|DataList], End) ->
 	filter_data_end(DataList, End).	
 	

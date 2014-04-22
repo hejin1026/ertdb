@@ -9,7 +9,7 @@
         loop/1, 
         stop/0]).
 
--define(RECV_TIMEOUT, 3600 * 24 * 10).
+-define(RECV_TIMEOUT, 3600 * 1000).
 
 -include("elog.hrl").
 -include("ertdb.hrl").

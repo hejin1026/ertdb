@@ -49,6 +49,8 @@ insert(Key, Time, Value) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:cast(Pid, {insert, Key, Time, Value}).
 
+
+
 fetch(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server2:call(Pid, {fetch, Key}).	
@@ -90,12 +92,24 @@ handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) -
 				{error, "build fail"}
 	    end,
 	{reply, Rest, State};
-	
-handle_call({fetch, Key}, _From, #state{cur_store=CurStore}=State) ->
-	Value = ertdb_store_current:read(CurStore, Key),
+		
+handle_call({fetch, Key}, _From, #state{rtk_config=RtkConfig, cur_store=CurStore}=State) ->
+	%% {ok, no_key} | {ok, #real_data}
+ 	Value = case ertdb_store_current:read(CurStore, Key) of
+		{ok, no_key} ->
+			case ets:lookup(RtkConfig, Key) of
+				[] -> 
+					{ok, no_init};	
+				[_config] ->
+					{ok, no_key}
+			end;
+		Other ->
+			Other
+	end,			
 	{reply, Value, State};
 	
 handle_call({fetch, Key, Begin, End}, _From, #state{his_store=HisStore}=State) ->
+	%% {ok, []} | {ok, [{Time, Quality, Value}|_]}
 	Values = ertdb_store_history:read(HisStore, Key, Begin, End),
 	{reply, Values, State};			
 	
@@ -149,16 +163,20 @@ build_config(RtkConfig, Key, Config) ->
 	
 parse([], RTK) ->
 	RTK;	
+parse([{"coef", Value}|Config], RTK) ->
+	parse(Config, RTK#rtk_config{coef=extbif:to_integer(Value)});		
+parse([{"offset", Value}|Config], RTK) ->
+	parse(Config, RTK#rtk_config{offset=extbif:to_integer(Value)});
 parse([{"compress", Value}|Config], RTK) ->
 	parse(Config, RTK#rtk_config{compress=Value});
 parse([{"dev", Value}|Config], RTK) ->	
-	parse(Config, RTK#rtk_config{dev=Value});
+	parse(Config, RTK#rtk_config{dev=extbif:to_integer(Value)});
 parse([{"maxtime", Value}|Config], RTK) ->	
 	parse(Config, RTK#rtk_config{maxtime=extbif:to_integer(Value)});
 parse([{"mintime", Value}|Config], RTK) ->	
 	parse(Config, RTK#rtk_config{mintime=extbif:to_integer(Value)});
 parse([{"his_dev", Value}|Config], RTK) ->	
-	parse(Config, RTK#rtk_config{his_dev=Value});
+	parse(Config, RTK#rtk_config{his_dev=extbif:to_integer(Value)});
 parse([{"his_maxtime", Value}|Config], RTK) ->	
 	parse(Config, RTK#rtk_config{his_maxtime=extbif:to_integer(Value)});
 parse([{"his_mintime", Value}|Config], RTK) ->		
