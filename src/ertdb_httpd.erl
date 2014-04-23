@@ -63,7 +63,7 @@ handle('GET', {"rtdb.json", RawKey, RawRange}, Req) ->
 handle('GET', {"rtdb", Key}, Req) ->
 	% ?INFO("get key:~p, ~p", [Key, unquote(Key)]),
 	case ertdb:fetch(list_to_binary(unquote(Key))) of
-     {ok, #real_data{time=Time, quality=Quality, data=Data, value=Value}} ->
+     {ok, #real_data{time=Time, quality=Quality, value=Value}} ->
         Resp = ["TIME:Value\n",format_data({Time, Quality, Value})],
         Req:ok({"text/plain", Resp});
 	{ok, no_key} ->
@@ -115,7 +115,7 @@ handle('POST', {"rtdb", "multiple.json"}, Req) ->
 		case ertdb:fetch(list_to_binary(unquote(Key))) of
 		    {ok, #real_data{time=Time, quality=Quality, data=Data, value=Value}} ->
 				?INFO("key:~p", [Key]),
-				[ [{key, list_to_binary(Key)}, {time, Time}, {data, Data}, {value, Value}, {quality, Quality}] | Acc];
+				[ [{key, list_to_binary(Key)}, {time, Time}, {data, Data}, {value, f_to_b(Value)}, {quality, Quality}] | Acc];
 			{ok, no_key} ->
 				[ [{quality, 0}, {key, list_to_binary(Key)}] | Acc];
 			{ok, no_init} ->
@@ -136,7 +136,7 @@ handle('POST', {"rtdb", "his_multiple.json"}, Req) ->
 	DataLists = lists:foldl(fun(Key, Acc) ->
 		case ertdb:fetch(list_to_binary(unquote(Key)), BeginTime, EndTime) of
 		    {ok, Records} -> 
-				Data = [[{time, Time}, {quality, Quality}, {value, Value}] || {Time, Quality, Value} <- Records],
+				Data = [[{time, Time}, {quality, Quality}, {value, f_to_b(Value)}] || {Time, Quality, Value} <- Records],
 				[ [{key, list_to_binary(Key)}, {data, Data}] | Acc];
 		    {error, Reason} ->
 				?WARNING("~s ~p", [Req:get(raw_path), Reason]),
@@ -170,13 +170,16 @@ to_datetime(StrfDatetime) when is_list(StrfDatetime), length(StrfDatetime) >= 8-
 	end.			
 	
 format_data({Time, Quality, Value} ) ->
-	lists:concat([extbif:strftime(extbif:datetime(Time)), " ==> ", Quality, "#", binary_to_list(Value)]);	
+	lists:concat([extbif:strftime(extbif:datetime(Time)), " ==> ", Quality, "#", Value]);	
 format_data(Data) ->
 	Data.		
 	
 
 to_string(T)  ->
-    lists:flatten(io_lib:format("~p", [T])).		
+    lists:flatten(io_lib:format("~p", [T])).
+	
+f_to_b(Value) ->
+	float_to_binary(Value, [{decimals, 4}, compact]).			
 	
 jsonify(Term) ->
     Encoder = mochijson2:encoder([]),

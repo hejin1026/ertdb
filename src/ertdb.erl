@@ -11,7 +11,7 @@
 		config/2,
 		insert/3,
 		fetch/1, fetch/3,
-		lookup/1, test/1,
+		lookup/1, lookup_his/1, test/1,
 		name/1
 		]).
 
@@ -40,7 +40,11 @@ test(Key) ->
 lookup(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:call(Pid, {lookup, Key}).		
-    
+
+lookup_his(Key) ->
+	Pid = chash_pg:get_pid(?MODULE, Key),
+	gen_server:call(Pid, {lookup_his, Key}).		    
+	
 config(Key, Config) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:call(Pid, {config, Key, Config}).
@@ -79,6 +83,10 @@ init([Id]) ->
 	
 handle_call({lookup, Key}, _From, #state{rtk_config=RtkConfig}=State) ->
 	{reply, ets:lookup(RtkConfig, Key), State};	
+	
+handle_call({lookup_his, Key}, _From, #state{his_store=HisStore}=State) ->
+	Values = ertdb_store_history:lookup(HisStore, Key),
+	{reply, Values, State};
 	
 handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) ->
 	Rest = 

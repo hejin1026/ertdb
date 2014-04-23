@@ -147,8 +147,10 @@ build_response(Rest) when is_list(Rest) ->
 build_response(Rest) ->
 	throw({unsupport_build, Rest}).		
 
-format_data({Time, Value}) ->
-	lists:concat([Time, ":", binary_to_list(Value)]);
+format_data(#real_data{time=Time, quality=Quality, value=Value}) -> % real
+	lists:concat([Time, ":", Quality, ":", extbif:to_list(Value)]);
+format_data({Time, Quality, Value}) ->	% history
+	lists:concat([Time, ":", Quality, ":", extbif:to_list(Value)]);
 format_data(Data) ->
 	Data.	
 	

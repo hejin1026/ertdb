@@ -98,7 +98,9 @@ to_binary(A) when is_atom(A) ->
 to_binary(B) when is_binary(B) ->
     B;
 to_binary(I) when is_integer(I) ->
-    list_to_binary(integer_to_list(I));
+    integer_to_binary(I));
+to_binary(I) when is_float(I) ->
+    float_to_binary(I, [{decimals, 4}, compact]);
 to_binary(L) when is_list(L) ->
     list_to_binary(L);
 to_binary(A) when is_atom(A) ->

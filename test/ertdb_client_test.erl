@@ -22,16 +22,19 @@ run() ->
 	% Key = ertdb_client_test:build_key(1, 11, 2).
 	% C = ertdb_client_test:c().
 	
-	% ertdb_client_test:config(C, Key, [{coef,1},{offset,-10},{compress, 1}, {dev, 8}, {his_dev, 16}, {maxtime, 60}, {mintime, 0}, {his_maxtime, 300}]).
+	% 配置 及 查询
+	% ertdb_client_test:config(C, Key, [{coef,0.1},{offset,-10},{compress, 1}, {dev, 0.2}, {his_dev, 0.1}, {maxtime, 60}, {mintime, 0}, {his_maxtime, 300}]).
 	% ertdb:lookup(Key).
 	
+	% 插入值 及 实时值查询
 	% ertdb_client_test:insert(C, Key, extbif:timestamp(), 123).
 	% ertdb_client_test:fetch(C, Key).	
-	% ertdb_store_current:read(ertdb_store_current, Key).
+	% ertdb:fetch(Key).
 			
+	% 历史值 及 历史值内存查询		
 	% ertdb_client_test:fetch(C, Key, extbif:timestamp({{2014,1,6}, time()}), extbif:timestamp()).	
-	% ertdb_store_history:read(ertdb_store_history, Key, extbif:timestamp({{2014,1,7}, time()}), extbif:timestamp()).
-	% ertdb_store_history:lookup(ertdb_store_history, Key).
+	% ertdb:fetch(Key, extbif:timestamp({{2014,4,23}, time()}), extbif:timestamp()).
+	% ertdb:lookup_his(Key).
 	
 	
 	% {ok, [{Name, DataFd, Indices}]} = gen_server:call(ertdb_store_history, {read_idx, Key, extbif:timestamp({{2014,1,6}, time()}), extbif:timestamp()}).

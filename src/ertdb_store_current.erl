@@ -85,7 +85,7 @@ handle_cast({write, Key, Time, Data}, #state{rttb=Rttb, his_story=HisStory} = St
 						cancel_timer(LastRef),
 						Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 						NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
-						ertdb_store_history:write(HisStory, Key, LastTime, LastValue, Config),
+						ertdb_store_history:write(HisStory, Key, LastQuality, LastTime, LastValue, Config),
 						ets:insert(Rttb, NewRtData)
 					end,	
 					
@@ -141,8 +141,9 @@ code_change(_OldVsn, State, _Extra) ->
 check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{dev=Dev, mintime=Mintime, maxtime=Maxtime}) ->
 	Interval = Time - Lastime,
 	Rule = lists:concat(["> interval ", Mintime]),
-	Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
-	Rule2 = lists:concat(["> deviation ", LastValue * Dev]),	
+	LV = extbif:to_integer(LastValue),
+	Deviation = abs(extbif:to_integer(Value) - LV),
+	Rule2 = lists:concat(["> deviation ", LV * Dev]),	
 	judge([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}]).
 		
 	

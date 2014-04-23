@@ -351,8 +351,9 @@ check_store({last, Lastime, LastQuality, LastValue}, {new, Time, Quality, Value}
 		true;
 	true ->
 		Rule = lists:concat(["> interval ", Mintime]),
-		Deviation = abs(extbif:to_integer(Value) - extbif:to_integer(LastValue)),
-		Rule2 = lists:concat(["> deviation ", LastValue * Dev]),	
+		LV = extbif:to_integer(LastValue),
+		Deviation = abs(extbif:to_integer(Value) - LV),
+		Rule2 = lists:concat(["> deviation ", LV * Dev]),	
 		judge_and([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}])
 	end.	
 
