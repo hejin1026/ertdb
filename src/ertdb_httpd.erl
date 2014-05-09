@@ -115,7 +115,7 @@ handle('POST', {"rtdb", "multiple.json"}, Req) ->
 		case ertdb:fetch(list_to_binary(unquote(Key))) of
 		    {ok, #real_data{time=Time, quality=Quality, data=Data, value=Value}} ->
 				?INFO("key:~p", [Key]),
-				[ [{key, list_to_binary(Key)}, {time, Time}, {data, Data}, {value, f_to_b(Value)}, {quality, Quality}] | Acc];
+				[ [{key, list_to_binary(Key)}, {time, Time}, {data, Data}, {value, extbif:to_binary(Value)}, {quality, Quality}] | Acc];
 			{ok, no_key} ->
 				[ [{quality, 0}, {key, list_to_binary(Key)}] | Acc];
 			{ok, no_init} ->
@@ -136,7 +136,7 @@ handle('POST', {"rtdb", "his_multiple.json"}, Req) ->
 	DataLists = lists:foldl(fun(Key, Acc) ->
 		case ertdb:fetch(list_to_binary(unquote(Key)), BeginTime, EndTime) of
 		    {ok, Records} -> 
-				Data = [[{time, Time}, {quality, Quality}, {value, f_to_b(Value)}] || {Time, Quality, Value} <- Records],
+				Data = [[{time, Time}, {quality, Quality}, {value, extbif:to_binary(Value)}] || {Time, Quality, Value} <- Records],
 				[ [{key, list_to_binary(Key)}, {data, Data}] | Acc];
 		    {error, Reason} ->
 				?WARNING("~s ~p", [Req:get(raw_path), Reason]),
@@ -177,9 +177,6 @@ format_data(Data) ->
 
 to_string(T)  ->
     lists:flatten(io_lib:format("~p", [T])).
-	
-f_to_b(Value) ->
-	float_to_binary(Value, [{decimals, 4}, compact]).			
 	
 jsonify(Term) ->
     Encoder = mochijson2:encoder([]),

@@ -166,7 +166,7 @@ case "$1" in
 	        exit 1
 	    fi
 	    # shift
-	    $NODETOOL rpc master_ctl $@
+	    $NODETOOL rpc ertdb $@
 	    ;;
 esac
 

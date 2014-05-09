@@ -3,7 +3,7 @@
               {id,"Ertdb"},
               {vsn,"1.0.0"},
               {modules,[chash,chash_pg,ertdb,ertdb_app,ertdb_client,
-                        ertdb_client_test,ertdb_httpd,ertdb_journal,
+                        ertdb_client_test,ertdb_ctl,ertdb_httpd,ertdb_journal,
                         ertdb_parser,ertdb_socket,ertdb_store_current,
                         ertdb_store_current_bak,ertdb_store_history,
                         ertdb_store_history_bak,ertdb_sup,ertdb_util,extbif,

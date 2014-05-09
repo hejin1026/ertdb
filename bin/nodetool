@@ -39,8 +39,8 @@ main(Args) ->
                 {badrpc, Reason} ->
                     io:format("RPC to ~p failed: ~p\n", [TargetNode, Reason]),
                     halt(1);
-                _ ->
-                    halt(1)
+                Other ->
+					io:format("~p\n", [Other])
             end;
         ["rpcterms", Module, Function, ArgsAsString] ->
             case rpc:call(TargetNode, list_to_atom(Module), list_to_atom(Function),
