@@ -107,7 +107,7 @@ handle_call({fetch, Key}, _From, #state{rtk_config=RtkConfig, cur_store=CurStore
 		{ok, no_key} ->
 			case ets:lookup(RtkConfig, Key) of
 				[] -> 
-					{ok, no_init};	
+					{ok, invalid_key};	
 				[_config] ->
 					{ok, no_key}
 			end;
