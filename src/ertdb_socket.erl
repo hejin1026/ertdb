@@ -9,7 +9,7 @@
         loop/1, 
         stop/0]).
 
--define(RECV_TIMEOUT, 3600 * 1000).
+-define(RECV_TIMEOUT, 8 * 3600 * 1000).
 
 -include("elog.hrl").
 -include("ertdb.hrl").
@@ -26,6 +26,7 @@ stop() ->
 
 
 loop(Socket) ->
+	?ERROR("get connnect from client...",[]),
     inet:setopts(Socket, [{keepalive, true}]),
     recvloop(Socket, ertdb_parser:init()).
 	

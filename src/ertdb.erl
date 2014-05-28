@@ -92,7 +92,12 @@ handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) -
 	Rest = 
 		try 
 			KConfig = build_config(RtkConfig, Key, binary_to_list(Config)),
-			ets:insert(RtkConfig, KConfig),
+			case KConfig of
+				delete ->
+					ets:delete(RtkConfig, Key);
+				_ ->	
+					ets:insert(RtkConfig, KConfig)
+			end,		
 			?SUCC
 	    catch
 	        Type:Error -> 
@@ -128,7 +133,7 @@ handle_call(Req, _From, State) ->
 
 handle_cast({insert, Key, Time, Value}, #state{journal=Journal, cur_store=CurStore} = State) ->
 	ertdb_store_current:write(CurStore, Key, Time, Value),
-    ertdb_journal:write(Journal, Key, Time, Value),
+	ertdb_journal:write(Journal, Key, Time, Value),
     {noreply, State};
 	
 handle_cast(Msg, State) ->
@@ -171,6 +176,15 @@ build_config(RtkConfig, Key, Config) ->
 	
 parse([], RTK) ->
 	RTK;	
+parse([{"vaild", Value}|Config], RTK) ->
+	case Value of	
+		"1" ->
+			parse(Config, RTK);	
+		"0" ->
+			delete	
+	end;
+parse([{"quality", Value}|Config], RTK) ->
+	parse(Config, RTK#rtk_config{quality=Value});						
 parse([{"coef", Value}|Config], RTK) ->
 	parse(Config, RTK#rtk_config{coef=extbif:to_integer(Value)});		
 parse([{"offset", Value}|Config], RTK) ->

@@ -87,8 +87,8 @@ handle_cast({write, Key, Time, Data}, #state{rttb=Rttb, his_story=HisStory} = St
 						NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
 						ertdb_store_history:write(HisStory, Key, LastQuality, LastTime, LastValue, Config),
 						ets:insert(Rttb, NewRtData)
-					end,	
-					
+					end,
+								
 					if(LastQuality < 5) ->
 						InsertFun();
 					true ->	
@@ -109,7 +109,7 @@ handle_cast(Msg, State) ->
     {noreply, State}.
 
 handle_info({maxtime, Key}, #state{rttb=Rttb, his_story=HisStory} = State) ->
-	[#rtk_config{maxtime=Maxtime}=Config] = ertdb:lookup(Key),
+	[#rtk_config{quality=Quality, maxtime=Maxtime}=Config] = ertdb:lookup(Key),
 	case ets:lookup(Rttb, Key) of
 		[] ->
 			throw({no_key, Key});
@@ -117,9 +117,14 @@ handle_info({maxtime, Key}, #state{rttb=Rttb, his_story=HisStory} = State) ->
 			?INFO("cur maxtime data:~p", [LastRtd]),			
 			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 			Time = extbif:timestamp(),
-			NextQua = if(Qua - 1 > 1) -> Qua - 1 ;
-					  true -> 1
-					  end,
+			NextQua = case Quality of
+					  "1" ->
+						if(Qua - 1 > 1) -> Qua - 1 ;
+						  true -> 1
+						  end;
+					 "0" ->
+						Qua
+					end,	 	  
 			true = ets:insert(Rttb, LastRtd#rtd{time=Time, quality=NextQua, ref=Ref}),
 			ertdb_store_history:write(HisStory, Key, LastTime, Qua, Value, Config)
 	end,	
@@ -163,3 +168,8 @@ format_value(Data, #rtk_config{coef=Coef, offset=Offset}) ->
 cancel_timer('undefined') -> ok;
 cancel_timer(Ref) -> erlang:cancel_timer(Ref).
 			
+	
+	
+	
+	
+	

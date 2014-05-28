@@ -31,6 +31,7 @@
 -define(SOCKET_OPTS, [binary, {active, once}, {packet, raw}, {reuseaddr, true}]).
 
 
--record(rtk_config, {key, coef=1, offset=0, compress, dev, maxtime=300, mintime=0, his_dev=-1, his_maxtime=600, his_mintime=0}).		
+-record(rtk_config, {key, quality="0", coef=1, offset=0, compress, 
+					dev, maxtime=300, mintime=0, his_dev=-1, his_maxtime=600, his_mintime=0}).		
 
 -record(real_data, {key, time, quality, data, value}).

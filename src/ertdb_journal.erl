@@ -144,6 +144,3 @@ close_file(undefined) ->
     ok;
 close_file(File) ->
     file:close(File).
-
-
-
