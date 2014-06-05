@@ -57,11 +57,11 @@ insert(Key, Time, Value) ->
 
 fetch(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server2:call(Pid, {fetch, Key}).	
+	gen_server2:call(Pid, {fetch, Key}, 7000).	
 	
 fetch(Key, Begin, End) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server2:call(Pid, {fetch, Key, Begin, End}).	
+	gen_server2:call(Pid, {fetch, Key, Begin, End}, 7000).	
 		
 	
 init([Id]) ->
@@ -108,7 +108,7 @@ handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) -
 		
 handle_call({fetch, Key}, _From, #state{rtk_config=RtkConfig, cur_store=CurStore}=State) ->
 	%% {ok, no_key} | {ok, #real_data}
- 	Value = case ertdb_store_current:read(CurStore, Key) of
+ 	Value = try ertdb_store_current:read(CurStore, Key) of
 		{ok, no_key} ->
 			case ets:lookup(RtkConfig, Key) of
 				[] -> 
@@ -118,12 +118,20 @@ handle_call({fetch, Key}, _From, #state{rtk_config=RtkConfig, cur_store=CurStore
 			end;
 		Other ->
 			Other
-	end,			
+		catch _:Reason ->
+			?ERROR("fetch timeout:~p,~p", [Key, erlang:get_stacktrace()]),
+			{error, timeout}
+		end,			
 	{reply, Value, State};
 	
 handle_call({fetch, Key, Begin, End}, _From, #state{his_store=HisStore}=State) ->
 	%% {ok, []} | {ok, [{Time, Quality, Value}|_]}
-	Values = ertdb_store_history:read(HisStore, Key, Begin, End),
+	Values = try 
+				ertdb_store_history:read(HisStore, Key, Begin, End) 
+			catch _:Reason ->
+				?ERROR("fetch his timeout:~p,~p,~p", [Key, {Begin, End}, erlang:get_stacktrace()]),
+				{error, timeout}	
+			end,	
 	{reply, Values, State};			
 	
 handle_call(Req, _From, State) ->

@@ -67,8 +67,8 @@ handle('POST', {"rtdb", "multiple.json"}, Req) ->
 			{ok, invalid_key} ->
 				Acc;
 		    {error, Reason} ->
-				?ERROR("multipe error:~p", [Key]),
-		        Acc
+				?ERROR("multipe error:~p,~p", [Key,Reason]),
+		        [{key, list_to_binary(Key)}, {error, Reason}|Acc]
 		end
 	end, [], string:tokens(Keys, ",")),
     Req:ok({"text/plain", jsonify(Records)});
