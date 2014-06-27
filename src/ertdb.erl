@@ -66,9 +66,10 @@ fetch(Key, Begin, End) ->
 	
 init([Id]) ->
 	process_flag(trap_exit, true),
+	RtkConfig = ets:new(rtk_config, [set, {keypos, #rtk_config.key}]),
     %start store process
-	{ok, HisStore} = ertdb_store_history:start_link(Id),
-    {ok, CurStore} = ertdb_store_current:start_link(HisStore, Id),
+	{ok, HisStore} = ertdb_store_history:start_link(Id, RtkConfig),
+    {ok, CurStore} = ertdb_store_current:start_link(Id, HisStore, RtkConfig),
 
     %start journal process
     {ok, Journal} = ertdb_journal:start_link(Id),
@@ -78,7 +79,6 @@ init([Id]) ->
     chash_pg:create(?MODULE),
     chash_pg:join(?MODULE, self(), name(Id), VNodes),
 	
-	RtkConfig = ets:new(rtk_config, [set, {keypos, #rtk_config.key}]),
 	{ok, #state{rtk_config=RtkConfig, journal=Journal, cur_store=CurStore, his_store=HisStore}}.
 	
 handle_call({lookup, Key}, _From, #state{rtk_config=RtkConfig}=State) ->
@@ -89,6 +89,7 @@ handle_call({lookup_his, Key}, _From, #state{his_store=HisStore}=State) ->
 	{reply, Values, State};
 	
 handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) ->
+	?ERROR("config:~p,~p", [Key, Config]),
 	Rest = 
 		try 
 			KConfig = build_config(RtkConfig, Key, binary_to_list(Config)),

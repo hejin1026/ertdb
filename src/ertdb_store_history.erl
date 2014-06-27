@@ -11,7 +11,7 @@
 
 -behavior(gen_server).
 
--export([start_link/1,
+-export([start_link/2,
         read/4, lookup/2,
         write/5, write/6
 		]).
@@ -31,14 +31,14 @@
 
 -define(RTDB_VER, <<"RTDB0001">>).
 
--record(state, {id, dir, tb, buffer, db, hdb}).
+-record(state, {id, rtk_config, dir, tb, buffer, db, hdb}).
 
--record(rtd, {key, time, quality, last, row}).
+-record(rtd, {key, time, quality, last, tag, ref, row}).
 
 -record(db, {name, index, data}).
 
-start_link(Id) ->
-    gen_server:start_link({local, name(Id)}, ?MODULE, [Id],
+start_link(Id, RtkConfig) ->
+    gen_server:start_link({local, name(Id)}, ?MODULE, [Id, RtkConfig],
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
@@ -56,7 +56,7 @@ read(Pid, Key, Begin, End) ->
 			{ok, []};
 		{CBegin, CEnd} ->		
     		gen_server:call(Pid, {read, Key, CBegin, CEnd})
-	end.		
+	end.
 	
 check_time(Begin, End) when Begin =< End ->
 	Today = extbif:timestamp(),	
@@ -76,7 +76,7 @@ check_time(Begin, End) ->
 lookup(Pid, Key) ->
 	gen_server:call(Pid, {lookup, Key}). 	
 		
-init([Id]) ->
+init([Id, RtkConfig]) ->
 	{ok, Opts} = application:get_env(store),
 	Dir = get_value(dir, Opts, "var/data"),
 	Buffer = get_value(buffer, Opts, 20),
@@ -84,7 +84,7 @@ init([Id]) ->
     %schedule daily rotation
     sched_daily_rotate(),
 	TB = ets:new(rttb_last, [set, {keypos, #rtd.key}]),
-	{ok, #state{id=Id, dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB, hdb=dict:new()}}.
+	{ok, #state{id=Id, rtk_config=RtkConfig, dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB, hdb=dict:new()}}.
 
 open(Dir, Id) ->
 	open(Dir, Id, dbname(extbif:timestamp())).
@@ -209,7 +209,7 @@ handle_call({read, Key, Begin, End}, _From, #state{tb=TB} = State) ->
 	            {ok, []};
 	        {error, Reason} -> 
 	            ?ERROR("pread ~p error: ~p", [Name, Reason]),
-	            {error, Reason}
+	            {ok, []}
         end
     end, [ E || {_, _, Indices} = E <- IdxList, Indices =/= []]),
 	DataFl = [Rows || {ok, Rows} <- DataF],
@@ -259,18 +259,20 @@ handle_cast({write, Key, Time, Quality, Value},
 	{noreply, State};	
 		
 		
-handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress}=Config}, 
+handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress, his_maxtime=Maxtime}=Config}, 
 		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
 	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
 	case ets:lookup(TB, Key) of
 		[] -> 
 			Rtd =#rtd{key=Key,time=Time,quality=Quality,last=Value,row=[{Time,Quality,Value}]},
 			ets:insert(TB, Rtd);
-		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, row=Rows}] ->
+		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, tag=Tag, ref=LastRef, row=Rows}] ->
 			InsertFun = fun() ->
-							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value},
+							ertdb_util:cancel_timer(LastRef),		
+							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=update,ref=Ref},
 							if length(Rows)+1 >= Buffer ->
-								flush_to_disk(DB, Key, Rows),
+								flush_to_disk(DB, Key, [{Time,Quality,Value}|Rows]),
 								ets:insert(TB, NewRtData#rtd{row=[]});
 							true ->
 								ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows]})
@@ -279,7 +281,7 @@ handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress}=Co
 			
 			case check_compress(Compress) of
 				true ->
-					case check_store({last, LastTime, LastQuality, LastValue}, {new, Time, Quality, Value}, Config) of
+					case check_store(Tag, {last, LastTime, LastQuality, LastValue}, {new, Time, Quality, Value}, Config) of
 						true ->
 							?INFO("his pass data:~p", [{new, Time, Value}]),
 							InsertFun();
@@ -289,7 +291,7 @@ handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress}=Co
 					end;
 				false ->
 					InsertFun()
-			end						
+			end
 	end,
 	{noreply, State};		
 		
@@ -306,6 +308,25 @@ handle_info(rotate, #state{id=Id, dir=Dir, db=DB} = State) ->
     sched_daily_rotate(),
 	{noreply, State#state{db=NewDB} };
 		
+handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer, rtk_config=RtkConfig} = State) ->
+	case ets:lookup(RtkConfig, Key) of
+		[] ->	
+			% 可能ertdb死掉配置清掉了
+			?ERROR("no ertdb config:~p", [Key]);
+		[#rtk_config{his_maxtime=Maxtime}] ->
+			[#rtd{quality=Quality, last=Value, row=Rows}] = ets:lookup(TB, Key),
+			?INFO("his maxtime data:~p", [{Key, Value}]),			
+			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+			Time = extbif:timestamp(),
+			NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=timeout,ref=Ref},
+			if length(Rows)+1 >= Buffer ->
+				flush_to_disk(DB, Key, [{Time,Quality,Value}|Rows]),
+				ets:insert(TB, NewRtData#rtd{row=[]});
+			true ->
+				ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows]})
+			end
+	end,
+	{noreply, State};
 	
 handle_info(Info, State) ->
     ?ERROR("his badinfo: ~p", [Info]),
@@ -331,7 +352,7 @@ flush_to_disk(#db{index=IdxRef,  data=DataFd}, Key, Rows) ->
         ?INFO("write indices: ~p", [Idx]),
         dets:insert(IdxRef, Idx);
     {error, Reason} ->
-        ?ERROR("~p", [Reason])
+        ?ERROR("write file error:~p", [Reason])
     end.
 	
 close(undefined) -> ok;
@@ -342,18 +363,17 @@ close(#db{index=IdxRef, data=DataFd}) ->
 check_compress(Compress) ->
 	Compress == "1" .	
 
-
-check_store({last, Lastime, LastQuality, LastValue}, {new, Time, Quality, Value}, 
-		#rtk_config{his_dev=Dev, his_mintime=Mintime, his_maxtime=Maxtime}) ->
+check_store(Tag, {last, Lastime, LastQuality, LastValue}, {new, Time, Quality, Value}, 
+		#rtk_config{his_dev=Dev, his_mintime=Mintime}) ->
 	Interval = Time - Lastime,
 	
-	if (Interval >= Maxtime) or (LastQuality =/= Quality) ->
+	if (Tag == timeout) or (LastQuality =/= Quality) ->
 		true;
 	true ->
 		Rule = lists:concat(["> interval ", Mintime]),
 		LV = extbif:to_integer(LastValue),
 		Deviation = abs(extbif:to_integer(Value) - LV),
-		Rule2 = lists:concat(["> deviation ", LV * Dev]),	
+		Rule2 = lists:concat(["> deviation ", LV * Dev]),
 		judge_and([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}])
 	end.	
 

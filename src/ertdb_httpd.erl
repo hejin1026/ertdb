@@ -44,9 +44,9 @@ handle('GET', {"rtdb", Key}, Req) ->
 		Resp = [{time, Time}, {quality, Quality}, {data, Data}, {value, extbif:to_binary(Value)}],
         Req:ok({"text/plain", jsonify(Resp)});
 	{ok, no_key} ->
-		Req:ok({"text/plain", "no_key"});	
+		Req:ok({"text/plain", [{value, <<"no_key">>}] });	
 	{ok, invalid_key} ->
-		Req:ok({"text/plain", "invalid_key"});		
+		Req:ok({"text/plain", [{value, <<"invalid_key">>}] });		
     {error, Reason} ->
 		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
         Req:respond({500, [], atom_to_list(Reason)})
@@ -63,12 +63,12 @@ handle('POST', {"rtdb", "multiple.json"}, Req) ->
 				?INFO("key:~p", [Key]),
 				[ [{key, list_to_binary(Key)}, {time, Time}, {data, Data}, {value, extbif:to_binary(Value)}, {quality, Quality}] | Acc];
 			{ok, no_key} ->
-				[ [{quality, 0}, {key, list_to_binary(Key)}] | Acc];
+				[ [{key, list_to_binary(Key)}, {quality, 0}, {value, 0}] | Acc];
 			{ok, invalid_key} ->
 				Acc;
 		    {error, Reason} ->
 				?ERROR("multipe error:~p,~p", [Key,Reason]),
-		        [{key, list_to_binary(Key)}, {error, Reason}|Acc]
+		        [ [{key, list_to_binary(Key)}, {error, Reason}] | Acc]
 		end
 	end, [], string:tokens(Keys, ",")),
     Req:ok({"text/plain", jsonify(Records)});

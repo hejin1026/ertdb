@@ -17,3 +17,6 @@ timestamp({{_Y,_M,_D}, {_H,_MM,_S}} = DateTime) ->
 datetime() ->
     calendar:local_time().	
 	
+			
+cancel_timer('undefined') -> ok;
+cancel_timer(Ref) -> erlang:cancel_timer(Ref).
