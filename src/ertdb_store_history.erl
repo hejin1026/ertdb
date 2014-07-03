@@ -248,7 +248,7 @@ handle_cast({write, Key, Time, Quality, Value},
 			InsertFun = fun() ->
 							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value},
 							if length(Rows)+1 >= Buffer ->
-								flush_to_disk(DB, Key, Rows),
+								flush_to_disk(DB, Key, [{Time,Quality,Value}|Rows]),
 								ets:insert(TB, NewRtData#rtd{row=[]});
 							true ->
 								ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows]})
