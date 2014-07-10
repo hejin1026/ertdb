@@ -64,13 +64,8 @@ handle_cast({write, Key, Time, Data}, #state{rttb=Rttb, his_story=HisStory, rtk_
 	?INFO("cur write:~p, ~p, ~p,~p", [State#state.id, Key, Time, Data]),
 	case ets:lookup(RtkConfig, Key)	of
 		[] -> 
-			case ets:lookup(Rttb, Key) of
-				[] -> 
-					ok;
-				[#rtd{time=LastTime, quality=Quality, value=LastValue}] ->	
-					ertdb_store_history:write(HisStory, Key, LastTime, Quality, LastValue)
-			end,	
-			ets:insert(Rttb, #rtd{key=Key,time=Time,data=Data,value=Data});
+			ets:insert(Rttb, #rtd{key=Key,time=Time,data=Data,value=Data}),
+			ertdb_store_history:write(HisStory, Key, Time, 5, Data);
 			
 		[#rtk_config{maxtime=Maxtime} = Config] ->
 			Value = format_value(Data, Config),
@@ -78,15 +73,16 @@ handle_cast({write, Key, Time, Data}, #state{rttb=Rttb, his_story=HisStory, rtk_
 				[] ->
 					Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 					NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
-					ets:insert(Rttb, NewRtData);
+					ets:insert(Rttb, NewRtData),
+					ertdb_store_history:write(HisStory, Key, Time, 5, Value, Config);
 				[#rtd{time=LastTime, quality=LastQuality, value=LastValue, ref=LastRef}] ->
 					InsertFun = fun() ->
 						?INFO("cur pass data:~p", [{new, Time, Value}]),
 						ertdb_util:cancel_timer(LastRef),
 						Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 						NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
-						ertdb_store_history:write(HisStory, Key, LastTime, LastQuality, LastValue, Config),
-						ets:insert(Rttb, NewRtData)
+						ets:insert(Rttb, NewRtData),
+						ertdb_store_history:write(HisStory, Key, Time, 5, Value, Config)
 					end,
 								
 					if(LastQuality < 5) ->
@@ -114,21 +110,24 @@ handle_info({maxtime, Key}, #state{rttb=Rttb, his_story=HisStory, rtk_config=Rtk
 			% 可能ertdb死掉配置清掉了
 			?ERROR("no ertdb config:~p", [Key]);
 		[#rtk_config{quality=IsQuality, maxtime=Maxtime}=Config] ->	
-			[#rtd{value=Value, time=LastTime, quality=Qua}=LastRtd] = ets:lookup(Rttb, Key),
+			[#rtd{value=Value, time=LastTime, quality=LastQua}=LastRtd] = ets:lookup(Rttb, Key),
 				?INFO("cur maxtime data:~p", [LastRtd]),			
-				Time = extbif:timestamp(),
-				case check_quality(IsQuality) of
+				% Time = extbif:timestamp(), 机器时间可能不一致
+				Time = LastTime + Maxtime,
+				Quality  = case check_quality(IsQuality) of
 					  true ->
-						  if(Qua - 1 > 1) -> 
+						  if(LastQua - 1 > 1) -> 
 							  Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-							  ets:insert(Rttb, LastRtd#rtd{time=Time, quality= Qua - 1, ref=Ref});
+							  ets:insert(Rttb, LastRtd#rtd{time=Time, quality= LastQua - 1, ref=Ref});
 						    true -> 
 							  ets:insert(Rttb, LastRtd#rtd{time=Time, quality= 1 })
-						  end;
+						  end,
+						  LastQua - 1;
 					  false ->
-						  ets:insert(Rttb, LastRtd#rtd{time=Time, quality=Qua})
+						  ets:insert(Rttb, LastRtd#rtd{time=Time, quality=LastQua}), 
+						  LastQua
 				end,
-				ertdb_store_history:write(HisStory, Key, LastTime, Qua, Value, Config)
+				ertdb_store_history:write(HisStory, Key, Time, Quality, Value, Config)
 	end,	
 	{noreply, State};
 				

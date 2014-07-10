@@ -24,7 +24,7 @@
 -behaviour(gen_server).
 -include("ertdb.hrl").
 
--define(TIMEOUT, 5000).
+-define(TIMEOUT, 7000).
 
 %% Type of gen_server process id
 -type client() :: pid() |

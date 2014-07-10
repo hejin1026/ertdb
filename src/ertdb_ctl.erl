@@ -8,6 +8,9 @@
 
 -compile(export_all).
 
+lookup_pid(Key) ->
+	chash_pg:get_pid(ertdb, list_to_binary(Key)).
+
 lookup(Key) ->
 	ertdb:lookup(list_to_binary(Key)).
 	
@@ -30,6 +33,8 @@ cluster(Node) ->
         ?PRINT("failed to cluster with ~p~n", [Node])
 	end.
 
+
+%% sysinfo
 status() ->
     Infos = lists:flatten(errdb:info()),
     [?PRINT("process ~p: ~n~p~n", [Name, Info]) || {Name, Info} <- Infos],
@@ -52,4 +57,15 @@ status() ->
     {value, Version} ->
         ?PRINT("ertdb ~p is running~n", [Version])
     end.
+	
+process(Process) ->
+    process_info(whereis(list_to_atom(Process)), [memory, message_queue_len,heap_size,total_heap_size]).	
+	
+memory() ->
+	erlang:memory().	
+	
+state(Module) ->
+	sys:get_status(list_to_atom(Module)).	
+	
+	
 	

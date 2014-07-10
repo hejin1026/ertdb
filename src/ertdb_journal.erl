@@ -138,7 +138,8 @@ handle_write(LogFile, {Key, Time, Value}) ->
 	file:write(LogFile, line({Key, Time, Value})).
 
 line({Key, Time, Value}) ->
-    list_to_binary([Key, "@", integer_to_list(Time), ":", Value, "\n"]).	
+	Now = extbif:timestamp(),
+    list_to_binary([integer_to_list(Now),"-", Key, "@", integer_to_list(Time), ":", Value, "\n"]).	
 
 close_file(undefined) ->
     ok;

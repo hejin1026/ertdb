@@ -268,7 +268,12 @@ handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress, hi
 			ets:insert(TB, Rtd);
 		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, tag=Tag, ref=LastRef, row=Rows}] ->
 			InsertFun = fun() ->
-							ertdb_util:cancel_timer(LastRef),		
+							case ertdb_util:cancel_timer(LastRef) of
+								false ->
+									?ERROR("cancel fail,timeout has send:~p, ~p,~p", [Key, LastValue, Value]);
+								_ ->
+									ok
+							end,			
 							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=update,ref=Ref},
 							if length(Rows)+1 >= Buffer ->
@@ -311,13 +316,20 @@ handle_info(rotate, #state{id=Id, dir=Dir, db=DB} = State) ->
 handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer, rtk_config=RtkConfig} = State) ->
 	case ets:lookup(RtkConfig, Key) of
 		[] ->	
-			% 可能ertdb死掉配置清掉了
+			% 可能ertdb死掉配置清掉了或者配置主动删掉了
 			?ERROR("no ertdb config:~p", [Key]);
 		[#rtk_config{his_maxtime=Maxtime}] ->
-			[#rtd{quality=Quality, last=Value, row=Rows}] = ets:lookup(TB, Key),
+			[#rtd{time=LastTime, quality=Quality, last=Value, row=Rows}] = ets:lookup(TB, Key),
 			?INFO("his maxtime data:~p", [{Key, Value}]),			
 			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-			Time = extbif:timestamp(),
+			Now = extbif:timestamp(), 
+			Time = LastTime + Maxtime, %机器时间可能不一致
+			%% 检查超时消息到达时间
+			if (Now - Time > 60) ->
+					?ERROR("timeout - time > 60, ~p,~p, ~p,~p", [Key, Value, Maxtime, extbif:datetime(Time)]);
+				true ->
+					ok
+			end,
 			NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=timeout,ref=Ref},
 			if length(Rows)+1 >= Buffer ->
 				flush_to_disk(DB, Key, [{Time,Quality,Value}|Rows]),

@@ -89,7 +89,7 @@ handle_call({lookup_his, Key}, _From, #state{his_store=HisStore}=State) ->
 	{reply, Values, State};
 	
 handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) ->
-	?ERROR("config:~p,~p", [Key, Config]),
+	% ?ERROR("config:~p,~p", [Key, Config]),
 	Rest = 
 		try 
 			KConfig = build_config(RtkConfig, Key, binary_to_list(Config)),
@@ -212,6 +212,6 @@ parse([{"his_maxtime", Value}|Config], RTK) ->
 	parse(Config, RTK#rtk_config{his_maxtime=extbif:to_integer(Value)});
 parse([{"his_mintime", Value}|Config], RTK) ->		
 	parse(Config, RTK#rtk_config{his_mintime=extbif:to_integer(Value)});
-parse([{Key, _Value}|_], _RTK) ->			
-	throw({unsupport_key, Key}).
+parse([{_Key, _Value}|Config], RTK) ->			
+	parse(Config, RTK).
 	
