@@ -36,18 +36,6 @@ cluster(Node) ->
 
 %% sysinfo
 status() ->
-    Infos = lists:flatten(errdb:info()),
-    [?PRINT("process ~p: ~n~p~n", [Name, Info]) || {Name, Info} <- Infos],
-    Tabs = ets:all(),
-    ErrdbTabs = lists:filter(fun(Tab) -> 
-        if
-        is_atom(Tab) ->
-            lists:prefix("ertdb", atom_to_list(Tab));
-        true ->
-            false
-        end
-    end, Tabs),
-    [?PRINT("table ~p:~n~p~n", [Tab, ets:info(Tab)]) || Tab <- ErrdbTabs],
     {InternalStatus, ProvidedStatus} = init:get_status(),
     ?PRINT("Node ~p is ~p. Status: ~p~n",
               [node(), InternalStatus, ProvidedStatus]),
