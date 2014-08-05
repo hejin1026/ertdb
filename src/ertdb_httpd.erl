@@ -44,9 +44,9 @@ handle('GET', {"rtdb", Key}, Req) ->
 		Resp = [{time, Time}, {quality, Quality}, {data, Data}, {value, extbif:to_binary(Value)}],
         Req:ok({"text/plain", jsonify(Resp)});
 	{ok, no_key} ->
-		Req:ok({"text/plain", [{value, <<"no_key">>}] });	
+		Req:ok({"text/plain", jsonify([{value, <<"no_key">>}]) });	
 	{ok, invalid_key} ->
-		Req:ok({"text/plain", [{value, <<"invalid_key">>}] });		
+		Req:ok({"text/plain", jsonify([{value, <<"invalid_key">>}]) });		
     {error, Reason} ->
 		?WARNING("~s ~p", [Req:get(raw_path), Reason]),
         Req:respond({500, [], atom_to_list(Reason)})

@@ -135,11 +135,12 @@ code_change(_OldVsn, State, _Extra) ->
 handle_write(undefined, _) ->
 	ok;
 handle_write(LogFile, {Key, Time, Value}) ->
-	file:write(LogFile, line({Key, Time, Value})).
+	file:write(LogFile, encode_line({Key, Time, Value})).
 
-line({Key, Time, Value}) ->
+encode_line({Key, Time, Value}) ->
 	Now = extbif:timestamp(),
-    list_to_binary([integer_to_list(Now),"-", Key, "@", integer_to_list(Time), ":", Value, "\n"]).	
+    list_to_binary([integer_to_list(Now),"|", Key, "@", integer_to_list(Time), "|", Value, "\n"]).	
+	
 
 close_file(undefined) ->
     ok;

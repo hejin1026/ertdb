@@ -37,6 +37,7 @@ test(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:call(Pid, {exit, Key}).	
 	
+	
 lookup(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:call(Pid, {lookup, Key}).		

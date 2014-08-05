@@ -264,7 +264,8 @@ handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress, hi
 	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
 	case ets:lookup(TB, Key) of
 		[] -> 
-			Rtd =#rtd{key=Key,time=Time,quality=Quality,last=Value,row=[{Time,Quality,Value}]},
+			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+			Rtd =#rtd{key=Key,time=Time,quality=Quality,last=Value,row=[{Time,Quality,Value}],ref=Ref},
 			ets:insert(TB, Rtd);
 		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, tag=Tag, ref=LastRef, row=Rows}] ->
 			InsertFun = fun() ->
