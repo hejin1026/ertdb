@@ -11,7 +11,7 @@
 		config/2,
 		insert/3,
 		fetch/1, fetch/3,
-		lookup/1, lookup_his/1, test/1,
+		lookup/1, lookup_his/1, test/1,lookup_info/1,
 		name/1
 		]).
 
@@ -31,12 +31,15 @@ start_link(Id) ->
     gen_server:start_link({local, name(Id)}, ?MODULE, [Id], []).		
 	
 name(Id) ->
-	list_to_atom("ertdb_" ++ integer_to_list(Id)).	
+	list_to_atom("ertdb_" ++ extbif:to_list(Id)).	
 	
 test(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:call(Pid, {exit, Key}).	
-	
+
+
+lookup_info(Pid) ->
+	gen_server:call(Pid, lookup_info).			
 	
 lookup(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
@@ -55,14 +58,13 @@ insert(Key, Time, Value) ->
 	gen_server:cast(Pid, {insert, Key, Time, Value}).
 
 
-
 fetch(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server2:call(Pid, {fetch, Key}, 7000).	
 	
 fetch(Key, Begin, End) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server2:call(Pid, {fetch, Key, Begin, End}, 7000).	
+	gen_server2:call(Pid, {fetch, Key, Begin, End}, 16000).	
 		
 	
 init([Id]) ->
@@ -82,8 +84,12 @@ init([Id]) ->
 	
 	{ok, #state{rtk_config=RtkConfig, journal=Journal, cur_store=CurStore, his_store=HisStore}}.
 	
+	
+handle_call(lookup_info, _From, #state{rtk_config=RtkConfig}=State) ->
+	{reply, ets:info(RtkConfig), State};	
+	
 handle_call({lookup, Key}, _From, #state{rtk_config=RtkConfig}=State) ->
-	{reply, ets:lookup(RtkConfig, Key), State};	
+	{reply, ets:lookup(RtkConfig, Key), State};		
 	
 handle_call({lookup_his, Key}, _From, #state{his_store=HisStore}=State) ->
 	Values = ertdb_store_history:lookup(HisStore, Key),
@@ -91,6 +97,7 @@ handle_call({lookup_his, Key}, _From, #state{his_store=HisStore}=State) ->
 	
 handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) ->
 	% ?ERROR("config:~p,~p", [Key, Config]),
+	% ertdb_util:incr(count_config, 1),
 	Rest = 
 		try 
 			KConfig = build_config(RtkConfig, Key, binary_to_list(Config)),

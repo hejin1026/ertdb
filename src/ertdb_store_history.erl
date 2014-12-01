@@ -33,7 +33,7 @@
 
 -record(state, {id, rtk_config, dir, tb, buffer, db, hdb}).
 
--record(rtd, {key, time, quality, last, tag, ref, row}).
+-record(rtd, {key, time, quality, last, tag, ref, row, next_sched_at}).
 
 -record(db, {name, index, data}).
 
@@ -260,23 +260,25 @@ handle_cast({write, Key, Time, Quality, Value},
 		
 		
 handle_cast({write, Key, Time, Quality, Value, #rtk_config{compress=Compress, his_maxtime=Maxtime}=Config}, 
-		#state{tb=TB, db=DB, buffer=Buffer} = State) ->
+		#state{id=Id,tb=TB, db=DB, buffer=Buffer} = State) ->
 	?INFO("his write key:~p, time:~p, value:~p", [Key, Time, Value]),
 	case ets:lookup(TB, Key) of
 		[] -> 
 			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 			Rtd =#rtd{key=Key,time=Time,quality=Quality,last=Value,row=[{Time,Quality,Value}],ref=Ref},
 			ets:insert(TB, Rtd);
-		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, tag=Tag, ref=LastRef, row=Rows}] ->
+		[#rtd{time=LastTime, quality=LastQuality, last=LastValue, tag=Tag, ref=LastRef, row=Rows}] = RtData ->
 			InsertFun = fun() ->
 							case ertdb_util:cancel_timer(LastRef) of
 								false ->
-									?ERROR("cancel fail,timeout has send:~p, ~p,~p", [Key, LastValue, Value]);
+									?ERROR("cancel fail :~p,timeout has send, lastime:~p, time:~p, ~p", 
+										[Id, extbif:datetime(LastTime), extbif:datetime(Time), RtData]);
 								_ ->
 									ok
-							end,			
+							end,
+							NextSchedAt = extbif:timestamp() + Maxtime,			
 							Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=update,ref=Ref},
+							NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=update,ref=Ref,next_sched_at=NextSchedAt},
 							if length(Rows)+1 >= Buffer ->
 								flush_to_disk(DB, Key, [{Time,Quality,Value}|Rows]),
 								ets:insert(TB, NewRtData#rtd{row=[]});
@@ -314,29 +316,60 @@ handle_info(rotate, #state{id=Id, dir=Dir, db=DB} = State) ->
     sched_daily_rotate(),
 	{noreply, State#state{db=NewDB} };
 		
-handle_info({maxtime, Key}, #state{tb=TB, db=DB, buffer=Buffer, rtk_config=RtkConfig} = State) ->
+handle_info({maxtime, Key}, #state{id=Id,tb=TB, db=DB, buffer=Buffer, rtk_config=RtkConfig} = State) ->
 	case ets:lookup(RtkConfig, Key) of
 		[] ->	
 			% 可能ertdb死掉配置清掉了或者配置主动删掉了
 			?ERROR("no ertdb config:~p", [Key]);
 		[#rtk_config{his_maxtime=Maxtime}] ->
-			[#rtd{time=LastTime, quality=Quality, last=Value, row=Rows}] = ets:lookup(TB, Key),
+			RtData = [#rtd{time=LastTime, quality=Quality, last=Value, row=Rows,next_sched_at=NextSchedAt}] = ets:lookup(TB, Key),
 			?INFO("his maxtime data:~p", [{Key, Value}]),			
-			Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
-			Now = extbif:timestamp(), 
+			
+			SchedTime = extbif:timestamp(), 
 			Time = LastTime + Maxtime, %机器时间可能不一致
 			%% 检查超时消息到达时间
-			if (Now - Time > 60) ->
-					?ERROR("timeout - time > 60, ~p,~p, ~p,~p", [Key, Value, Maxtime, extbif:datetime(Time)]);
+			if (SchedTime - Time > 60) ->
+					?ERROR("sched - time > 60, ~p,~p, ~p", [Id,extbif:datetime(Time), RtData]);
 				true ->
 					ok
 			end,
-			NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=timeout,ref=Ref},
+			
+			NewRtData = #rtd{key=Key,time=Time,quality=Quality,last=Value,tag=timeout},
+			
 			if length(Rows)+1 >= Buffer ->
 				flush_to_disk(DB, Key, [{Time,Quality,Value}|Rows]),
-				ets:insert(TB, NewRtData#rtd{row=[]});
+				%% 消息的逻辑处理时间
+		        FinishTime = extbif:timestamp(),
+		        Duration = FinishTime - NextSchedAt,
+				Interval = Maxtime - Duration,
+				NewInterval = 
+					if  Interval =< 0 ->
+			            ?ERROR("Duration is longer than period: ~p, id:~p,key: ~p", [Duration, Id, RtData]),
+			            Maxtime;
+					Interval < 60 ->
+						?WARNING("Duration is too longer:~p, id:~p, key:~p, maxtime:~p", [Duration, Id,Key, Maxtime]),
+						Interval;
+					true ->
+						Interval
+				end,
+				Ref = erlang:send_after(NewInterval * 1000, self(), {maxtime, Key}),
+				ets:insert(TB, NewRtData#rtd{row=[], ref=Ref, next_sched_at=FinishTime+NewInterval});
 			true ->
-				ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows]})
+				%% 消息的潜伏期
+				Latency = SchedTime - NextSchedAt,
+				Interval = Maxtime - Latency,
+				NewInterval = 
+					if  Interval =< 0 ->
+			            ?ERROR("Latency is longer than period: ~p, id:~p,key: ~p", [Latency, Id, RtData]),
+			            Maxtime;
+					Interval < 60 ->
+						?WARNING("Latency is too longer:~p, id:~p, key:~p, maxtime:~p", [Latency, Id,Key, Maxtime]),
+						Interval;
+					true ->
+						Interval
+				end,
+				Ref = erlang:send_after(NewInterval * 1000, self(), {maxtime, Key}),
+				ets:insert(TB, NewRtData#rtd{row=[{Time,Quality,Value}|Rows], ref=Ref, next_sched_at=SchedTime+NewInterval})
 			end
 	end,
 	{noreply, State};

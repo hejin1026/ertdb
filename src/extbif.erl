@@ -32,7 +32,7 @@
 		sleep/1]).
 
 timestamp() ->
-	{MegaSecs, Secs, _MicroSecs} = erlang:now(),
+	{MegaSecs, Secs, _MicroSecs} = os:timestamp(),
 	MegaSecs * 1000000 + Secs.
 
 %%% TODO g(now) - g(1970) = U + 8小时差
@@ -41,7 +41,7 @@ timestamp({{_Y,_M,_D}, {_H,_MM,_S}} = DateTime) ->
 	Seconds(DateTime) - Seconds({{1970,1,1},{8,0,0}}).
 
 microsecs() ->
-    {Mega,Sec,Micro} = erlang:now(),
+    {Mega,Sec,Micro} = os:timestamp(),
     (Mega*1000000+Sec)*1000000+Micro.
 
 millsecs() ->

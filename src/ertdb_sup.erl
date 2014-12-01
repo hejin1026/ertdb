@@ -37,11 +37,13 @@ init([]) ->
 	%% Socket
     Socket = {ertdb_socket, {ertdb_socket, start, [SocketConf]},
 	   permanent, 10, worker, [ertdb_socket]},
+	   
+	Monitor = ?worker(ertdb_monitor),
 		   
 	% Journal = ?CHILD(ertdb_journal, worker),	   	%
 	% 
 	% CurStore = ?CHILD(ertdb_store_current, worker),
 	% HisStore = ?CHILD(ertdb_store_history, worker),
 		   
-	{ok, {{one_for_one, 5, 10}, [Socket, Httpd, Pg|Ertdbs]}}.
+	{ok, {{one_for_one, 5, 10}, [Socket, Httpd, Pg, Monitor|Ertdbs]}}.
 	

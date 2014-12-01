@@ -10,6 +10,9 @@
 
 lookup_pid(Key) ->
 	chash_pg:get_pid(ertdb, list_to_binary(Key)).
+	
+lookup_pid2(Key) ->
+	process_info(chash_pg:get_pid(ertdb, list_to_binary(Key)), [registered_name]).	
 
 lookup(Key) ->
 	ertdb:lookup(list_to_binary(Key)).
@@ -20,6 +23,11 @@ lookup_his(Key) ->
 fetch(Key) ->
 	ertdb:fetch(list_to_binary(Key)).
 	
+lookup_config(No) ->	
+	ertdb:lookup_info(ertdb:name(No)).
+	
+lookup_current(No) ->	
+	ertdb_store_current:lookup_info(ertdb_store_current:name(No)).		
 	
 cluster_info() ->
     Nodes = [node()|nodes()],
@@ -48,6 +56,9 @@ status() ->
 	
 process(Process) ->
     process_info(whereis(list_to_atom(Process)), [memory, message_queue_len,heap_size,total_heap_size]).	
+
+process2(Process) ->
+    process_info(whereis(list_to_atom(Process)), [messages]).	
 	
 memory() ->
 	erlang:memory().	

@@ -10,7 +10,7 @@
 
 -include("elog.hrl").
 
--behavior(gen_server).
+-behavior(gen_server2).
 
 -export([start_link/1, 
         write/4]).
@@ -23,21 +23,21 @@
         terminate/2,
         code_change/3]).
 
--record(state, {id, logdir, logfile}).
+-record(state, {id, logdir, logfile, thishour, buffer_size = 100, queue = []}).
 
 %%--------------------------------------------------------------------
 %% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
 %% Description: Starts the server
 %%--------------------------------------------------------------------
 start_link(Id) ->
-    gen_server:start_link({local, name(Id)}, ?MODULE, [Id],
+    gen_server2:start_link({local, name(Id)}, ?MODULE, [Id],
                 [{spawn_opt, [{min_heap_size, 20480}]}]).
 
 name(Id) ->
-	list_to_atom("errdb_journal" ++ integer_to_list(Id)).		
+	list_to_atom("ertdb_journal_" ++ integer_to_list(Id)).		
 
 write(Pid, Key, Time, Value) ->
-    gen_server:cast(Pid, {write, Key, Time, Value}).
+    gen_server2:cast(Pid, {write, Key, Time, Value}).
 
 %%--------------------------------------------------------------------
 %% Function: init(Args) -> {ok, State} |
@@ -52,7 +52,10 @@ init([Id]) ->
 	random:seed(now()),
     {ok, Opts} = application:get_env(journal),
     Dir = get_value(dir, Opts),
-    State = #state{id=Id, logdir = Dir},
+	BufferSize = get_value(buffer, Opts, 100),
+	BufferSize1 = BufferSize + random:uniform(BufferSize),
+	?INFO("~p buffer_size: ~p", [name(Id), BufferSize1]),
+     State = #state{id = Id, logdir = Dir, buffer_size = BufferSize1},
     {noreply, NewState} = handle_info(journal_rotation, State),
     ?INFO("~p is started.", [ertdb_journal]),
     {ok, NewState}.
@@ -76,9 +79,15 @@ handle_call(Req, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-handle_cast({write, Key, Time, Value}, #state{logfile = LogFile} = State) ->
-	handle_write(LogFile, {Key, Time, Value}),
-	{noreply, State};
+handle_cast({write, Key, Time, Value}, #state{logfile = LogFile, 
+		buffer_size = MaxSize, queue = Q} = State) ->
+	case length(Q) >= MaxSize of
+    true ->
+        flush_to_disk(LogFile, Q),
+        {noreply, State#state{queue = []}};
+    false ->
+        {noreply, State#state{queue = [{Key, Time, Value} | Q]}}
+    end;
 
     
 handle_cast(_Msg, State) ->
@@ -102,6 +111,12 @@ handle_info(journal_rotation, #state{id=Id, logdir = Dir, logfile = File} = Stat
     erlang:send_after((NextHour + 60 - Now) * 1000, self(), journal_rotation),
     {noreply, State#state{logfile = NewFile}};
 
+
+handle_info(flush_queue, #state{logfile = File, queue = Q} = State) ->
+    flush_to_disk(File, Q),
+    erlang:send_after(2000, self(), flush_queue),
+    {noreply, State#state{queue = []}};
+
 handle_info(Info, State) ->
     ?ERROR("badinfo: ~p", [Info]),
     {noreply, State}.
@@ -109,9 +124,8 @@ handle_info(Info, State) ->
 
 priorities_info(journal_rotation, _State) ->
     10;
-priorities_info(_, _State) ->
-	0.
-
+priorities_info(flush_queue, _State) ->
+    5.
 %%--------------------------------------------------------------------
 %% Function: terminate(Reason, State) -> void()
 %% Description: This function is called by a gen_server when it is about to
@@ -119,7 +133,8 @@ priorities_info(_, _State) ->
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{logfile = LogFile}) ->
+terminate(_Reason, #state{logfile = LogFile, queue=Q}) ->
+	flush_to_disk(LogFile, Q),
     close_file(LogFile),
     ok.
 %%--------------------------------------------------------------------
@@ -132,14 +147,16 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-handle_write(undefined, _) ->
+flush_to_disk(undefined, _) ->
 	ok;
-handle_write(LogFile, {Key, Time, Value}) ->
-	file:write(LogFile, encode_line({Key, Time, Value})).
+flush_to_disk(_File, Q) when length(Q) == 0 ->
+    ok;
+flush_to_disk(LogFile, Q) ->
+	Lines = [encode_line(Record) || Record <- lists:reverse(Q)],
+	file:write(LogFile, list_to_binary(Lines)).
 
 encode_line({Key, Time, Value}) ->
-	Now = extbif:timestamp(),
-    list_to_binary([integer_to_list(Now),"|", Key, "@", integer_to_list(Time), "|", Value, "\n"]).	
+    list_to_binary([Key, "@", integer_to_list(Time), "|", Value, "\n"]).	
 	
 
 close_file(undefined) ->

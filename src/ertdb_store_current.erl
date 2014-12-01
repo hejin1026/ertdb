@@ -15,7 +15,9 @@
 
 -export([start_link/3,
         write/4,
-		read/2
+		read/2,
+		lookup_info/1,
+		name/1
 		]).
 		
 -export([init/1, 
@@ -34,17 +36,27 @@ start_link(Id, HisStore, RtkConfig) ->
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
-    list_to_atom("ertdb_store_current_" ++ integer_to_list(Id)).	
+    list_to_atom("ertdb_store_current_" ++ extbif:to_list(Id)).	
 			
 write(Pid, Key, Time, Value) ->
     gen_server:cast(Pid, {write, Key, Time, Value}).
 		
 read(Pid, Key) ->
 	gen_server:call(Pid, {read, Key}).	
+	
+lookup_info(Pid) ->
+	gen_server:call(Pid, ets_info).	
+	
 		
 init([Id, HisStore, RtkConfig]) ->
     RTTB = ets:new(rttb, [set, {keypos, #rtd.key}]),
     {ok, #state{id=Id, rttb = RTTB, his_story=HisStore, rtk_config=RtkConfig}}.
+	
+	
+handle_call(ets_info, _From, #state{rttb = Rttb} = State) ->
+	Res = ets:info(Rttb, size), 
+	{reply, Res, State};
+		
 	
 handle_call({read, Key}, _From, #state{rttb = Rttb} = State) ->
 	Res = case ets:lookup(Rttb, Key) of
@@ -78,7 +90,13 @@ handle_cast({write, Key, Time, Data}, #state{rttb=Rttb, his_story=HisStory, rtk_
 				[#rtd{time=LastTime, quality=LastQuality, value=LastValue, ref=LastRef}] ->
 					InsertFun = fun() ->
 						?INFO("cur pass data:~p", [{new, Time, Value}]),
-						ertdb_util:cancel_timer(LastRef),
+						case ertdb_util:cancel_timer(LastRef) of
+							false ->
+								?ERROR("cancel fail,timeout has send:~p, lastime:~p, maxtime:~p, value:~p", 
+										[Key, LastTime, Maxtime, Value]);
+							_ ->
+								ok
+						end,
 						Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
 						NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
 						ets:insert(Rttb, NewRtData),

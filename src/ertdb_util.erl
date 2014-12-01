@@ -20,3 +20,11 @@ datetime() ->
 			
 cancel_timer('undefined') -> ok;
 cancel_timer(Ref) -> erlang:cancel_timer(Ref).
+
+incr(Name, Val) ->
+    case get(Name) of
+    undefined ->
+        put(Name, Val);
+    OldVal ->
+        put(Name, OldVal+Val)
+    end.

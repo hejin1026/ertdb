@@ -16,10 +16,13 @@
 ##-heart
 -smp auto
 
+## bing cpu
+# +sbt db	
+
 ## Enable kernel poll and a few async threads
 +K true
 
-+A 2
++A 32
 
 ## Treat error_logger warnings as warnings
 +W w
