@@ -35,8 +35,11 @@ init([]) ->
 	%% Socket config
 	{ok, SocketConf} = application:get_env(socket), 
 	%% Socket
-    Socket = {ertdb_socket, {ertdb_socket, start, [SocketConf]},
-	   permanent, 10, worker, [ertdb_socket]},
+    % Socket = {ertdb_socket, {ertdb_socket, start, [SocketConf]},
+% 	   permanent, 10, worker, [ertdb_socket]},
+
+	Socket = {ertdb_esockd, {ertdb_esockd, start, [SocketConf]},
+	   permanent, 10, worker, [ertdb_esockd]},
 	   
 	Monitor = ?worker(ertdb_monitor),
 		   

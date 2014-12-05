@@ -20,7 +20,7 @@ start(_Type, _Args) ->
 	ok = application:start(syntax_tools),
 	ok = application:start(goldrush),
 	ok = application:start(lager),
-	% ok = application:start(esockd),
+	ok = application:start(esockd),
     {ok, SupPid} = ertdb_sup:start_link(),
     true = register(ertdb_app, self()),
     {ok, SupPid}.
