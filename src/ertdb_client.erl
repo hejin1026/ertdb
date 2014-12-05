@@ -35,7 +35,7 @@
 
 %% API
 -export([start_link/0, start_link/1, start_link/2, start_link/3, 
-		stop/1, q/2, q/3, qp/2, qp/3, q_noreply/2]).
+		stop/1, q/2, q/3, qp/2, qp/3, q_noreply/2, qp_noreply/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -67,7 +67,7 @@ start_link() ->
 start_link(Args) ->
     Host           = proplists:get_value(host, Args, "127.0.0.1"),
     Port           = proplists:get_value(port, Args, 6320),
-    ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 100),
+    ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 1000),
     start_link(Host, Port, ReconnectSleep).	
 
 start_link(Host, Port) ->
@@ -82,7 +82,8 @@ start_link(Host, Port, ReconnectSleep)
   when is_list(Host),
        is_integer(Port),
        is_integer(ReconnectSleep) orelse ReconnectSleep =:= no_reconnect ->
-    gen_server:start_link(?MODULE, [Host, Port, ReconnectSleep], []).
+    gen_server:start_link(?MODULE, [Host, Port, ReconnectSleep], 
+		[{spawn_opt, [{priority, high}, {min_heap_size, 204800}, {min_bin_vheap_size, 1024 * 1024}]}]).
 
 
 
@@ -118,8 +119,12 @@ qp(Client, Pipeline, Timeout) ->
 %% @see q/2
 %% Executes the command but does not wait for a response and ignores any errors.
 q_noreply(Client, Command) ->
-    cast(Client, Command).
-
+    Request = {request, create_multibulk(Command)},
+    gen_server:cast(Client, Request).
+	
+qp_noreply(Client, Pipeline) ->
+	Commands = [create_multibulk(Command) || Command <- Pipeline],	
+	gen_server:cast(Client, {request, Commands}).
 %%
 %% INTERNAL HELPERS
 %%
@@ -134,9 +139,6 @@ pipeline(Client, Pipeline, Timeout) ->
     Request = {pipeline, [create_multibulk(Command) || Command <- Pipeline]},
     gen_server:call(Client, Request, Timeout).
 
-cast(Client, Command) ->
-    Request = {request, create_multibulk(Command)},
-    gen_server:cast(Client, Request).
 
 -spec create_multibulk(Args::iolist()) -> Command::iolist().
 %% @doc: Creates a multibulk command with all the correct size headers

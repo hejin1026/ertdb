@@ -41,6 +41,27 @@ cluster(Node) ->
         ?PRINT("failed to cluster with ~p~n", [Node])
 	end.
 
+sockets() ->
+    ActiveSockets = mochiweb_socket_server:get(ertdb_socket, active_sockets),
+    ?PRINT("Total Client Sockets: ~p~n", [ActiveSockets]).
+
+%Type: ertdb | jour | curr | hist
+process_info(Type) ->
+    Infos = lists:flatten(ertdb:info(Type)),
+    [[Name, Info] || {Name, Info} <- Infos].
+
+%Type : ertdb_rttb | ertdb_rttb_last | ertdb_rtk_config
+ets_info(Type) ->
+    Tabs = ets:all(),
+    ErrdbTabs = lists:filter(fun(Tab) -> 
+        if
+        is_atom(Tab) ->
+            lists:prefix(Type, atom_to_list(Tab));
+        true ->
+            false
+        end
+    end, Tabs),
+    [[Tab, ets:info(Tab)] || Tab <- ErrdbTabs].
 
 %% sysinfo
 status() ->
@@ -55,7 +76,7 @@ status() ->
     end.
 	
 process(Process) ->
-    process_info(whereis(list_to_atom(Process)), [memory, message_queue_len,heap_size,total_heap_size]).	
+    process_info(whereis(list_to_atom(Process)), [memory, message_queue_len,heap_size,total_heap_size, reductions]).	
 
 process2(Process) ->
     process_info(whereis(list_to_atom(Process)), [messages]).	

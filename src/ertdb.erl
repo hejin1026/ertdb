@@ -7,7 +7,7 @@
 
 -behaviour(gen_server2).
 
--export([start_link/1,
+-export([start_link/1, info/1,
 		config/2,
 		insert/3,
 		fetch/1, fetch/3,
@@ -31,12 +31,16 @@ start_link(Id) ->
     gen_server:start_link({local, name(Id)}, ?MODULE, [Id], []).		
 	
 name(Id) ->
-	list_to_atom("ertdb_" ++ extbif:to_list(Id)).	
+	ertdb_util:name("ertdb", Id).		
 	
 test(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server:call(Pid, {exit, Key}).	
 
+info(Type) ->
+    Pids = chash_pg:get_pids(ertdb),
+    [gen_server2:call(Pid, {info, Type}) || Pid <- Pids].
+	
 
 lookup_info(Pid) ->
 	gen_server:call(Pid, lookup_info).			
@@ -69,7 +73,7 @@ fetch(Key, Begin, End) ->
 	
 init([Id]) ->
 	process_flag(trap_exit, true),
-	RtkConfig = ets:new(rtk_config, [set, {keypos, #rtk_config.key}]),
+	RtkConfig = ets:new(ertdb_util:name("ertdb_rtk_config", Id), [set, {keypos, #rtk_config.key}, named_table]),
     %start store process
 	{ok, HisStore} = ertdb_store_history:start_link(Id, RtkConfig),
     {ok, CurStore} = ertdb_store_current:start_link(Id, HisStore, RtkConfig),
@@ -84,6 +88,16 @@ init([Id]) ->
 	
 	{ok, #state{rtk_config=RtkConfig, journal=Journal, cur_store=CurStore, his_store=HisStore}}.
 	
+	
+handle_call({info, Type}, _From, #state{journal=Journal, cur_store=CurStore, his_store=HisStore} = State) ->
+	Reply = case Type of
+		"ertdb" -> ertdb_util:pinfo(self());
+		"jour" -> ertdb_util:pinfo(Journal);
+		"curr" -> ertdb_util:pinfo(CurStore);
+		"hist" -> ertdb_util:pinfo(HisStore);
+		_ -> []
+     end,
+    {reply, Reply, State};	
 	
 handle_call(lookup_info, _From, #state{rtk_config=RtkConfig}=State) ->
 	{reply, ets:info(RtkConfig), State};	

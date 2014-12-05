@@ -36,7 +36,7 @@ start_link(Id, HisStore, RtkConfig) ->
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
-    list_to_atom("ertdb_store_current_" ++ extbif:to_list(Id)).	
+	ertdb_util:name("ertdb_store_current", Id).
 			
 write(Pid, Key, Time, Value) ->
     gen_server:cast(Pid, {write, Key, Time, Value}).
@@ -49,7 +49,7 @@ lookup_info(Pid) ->
 	
 		
 init([Id, HisStore, RtkConfig]) ->
-    RTTB = ets:new(rttb, [set, {keypos, #rtd.key}]),
+    RTTB = ets:new(ertdb_util:name("ertdb_rttb", Id), [set, {keypos, #rtd.key}, named_table]),
     {ok, #state{id=Id, rttb = RTTB, his_story=HisStore, rtk_config=RtkConfig}}.
 	
 	

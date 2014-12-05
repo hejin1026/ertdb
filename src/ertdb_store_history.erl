@@ -42,7 +42,7 @@ start_link(Id, RtkConfig) ->
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
-    list_to_atom("ertdb_store_history_" ++ integer_to_list(Id)).			
+	ertdb_util:name("ertdb_store_history", Id).		
 	
 write(Pid, Key, Time, Quality, Value) ->
 	gen_server:cast(Pid, {write, Key, Time, Quality, Value}).	
@@ -77,14 +77,17 @@ lookup(Pid, Key) ->
 	gen_server:call(Pid, {lookup, Key}). 	
 		
 init([Id, RtkConfig]) ->
+	random:seed(now()),
 	{ok, Opts} = application:get_env(store),
 	Dir = get_value(dir, Opts, "var/data"),
-	Buffer = get_value(buffer, Opts, 20),
+	Buffer = get_value(buffer, Opts, 100),
 	{ok, DB} = open(Dir, Id),
     %schedule daily rotation
     sched_daily_rotate(),
-	TB = ets:new(rttb_last, [set, {keypos, #rtd.key}]),
-	{ok, #state{id=Id, rtk_config=RtkConfig, dir=Dir, buffer=Buffer+random:uniform(Buffer), tb=TB, db=DB, hdb=dict:new()}}.
+	TB = ets:new(ertdb_util:name("ertdb_rttb_last", Id), [set, {keypos, #rtd.key}, named_table]),
+	NewBuffer = Buffer+random:uniform(Buffer),
+	?INFO("get buffer:~p", [NewBuffer]),
+	{ok, #state{id=Id, rtk_config=RtkConfig, dir=Dir, buffer=NewBuffer, tb=TB, db=DB, hdb=dict:new()}}.
 
 open(Dir, Id) ->
 	open(Dir, Id, dbname(extbif:timestamp())).
