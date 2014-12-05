@@ -25,10 +25,10 @@ start_link(Sock) ->
 
 init(Sock) ->
 	esockd_client:accepted(Sock),
+	?INFO("get connnect from client...",[]),
 	loop(Sock, ertdb_parser:init()).
 
 loop(Sock, ParserState) ->
-	?ERROR("get connnect from client...",[]),
 	case gen_tcp:recv(Sock, 0) of
 		{ok, Data} -> 
 			mainloop(Sock, ParserState, Data);
