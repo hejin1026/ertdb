@@ -29,7 +29,9 @@ loop(Socket) ->
 	?ERROR("get connnect from client...",[]),
     inet:setopts(Socket, [{keepalive, true}]),
     recvloop(Socket, ertdb_parser:init()).
-	
+
+
+%% error for try catch	
 recvloop(Socket, ParserState) ->
 	inet:setopts(Socket, [{active, once}]),
 	receive

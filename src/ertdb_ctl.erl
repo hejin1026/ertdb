@@ -45,10 +45,13 @@ sockets() ->
     ActiveSockets = mochiweb_socket_server:get(ertdb_socket, active_sockets),
     ?PRINT("Total Client Sockets: ~p~n", [ActiveSockets]).
 
+process_count() ->	
+	erlang:system_info(process_count).	
+
 %Type: ertdb | jour | curr | hist
-process_info(Type) ->
+process_all(Type) ->
     Infos = lists:flatten(ertdb:info(Type)),
-    [[Name, Info] || {Name, Info} <- Infos].
+    [[Name, Info] || {Name, Info} <- Infos].	
 
 %Type : ertdb_rttb | ertdb_rttb_last | ertdb_rtk_config
 ets_info(Type) ->

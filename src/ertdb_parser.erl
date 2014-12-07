@@ -99,16 +99,13 @@ parse(#pstate{state = status_continue,
 %%
 
 parse_multibulk(<<$*, _/binary>> = Data) ->
-    case get_newline_pos(Data) of
-        undefined ->
-            {continue, {incomplete_size, Data}};
-        NewlinePos ->
-            OffsetNewlinePos = NewlinePos - 1,
-            <<$*, Size:OffsetNewlinePos/binary, ?NL, Bulk/binary>> = Data,
+	case binary:split(Data, ?NL) of
+		[_] ->
+			{continue, {incomplete_size, Data}};
+		[<<$*, Size/binary>>, Rest] ->
             IntSize = list_to_integer(binary_to_list(Size)),
-
-            do_parse_multibulk(IntSize, Bulk)
-    end.
+            do_parse_multibulk(IntSize, Rest)
+	end.		
 
 %% Size of multibulk was incomplete, try again
 parse_multibulk({incomplete_size, PartialData}, NewData0) ->
@@ -165,31 +162,24 @@ parse_bulk(<<$$, _/binary>> = Data) ->
     %% Find the position of the first terminator, everything up until
     %% this point contains the size specifier. If we cannot find it,
     %% we received a partial response and need more data
-    case get_newline_pos(Data) of
-        undefined ->
-            {continue, {incomplete_size, Data}};
-        NewlinePos ->
-            OffsetNewlinePos = NewlinePos - 1, % Take into account the first $
-            <<$$, Size:OffsetNewlinePos/binary, Bulk/binary>> = Data,
+	case binary:split(Data, ?NL) of
+		[_] ->
+			{continue, {incomplete_size, Data}};
+        [<<$$, Size/binary>>, Rest] ->
             IntSize = list_to_integer(binary_to_list(Size)),
-
             if
                 %% Nil response from redis
                 IntSize =:= -1 ->
-                    <<?NL, Rest/binary>> = Bulk,
                     {ok, undefined, Rest};
                 %% We have enough data for the entire bulk
-                size(Bulk) - (size(<<?NL>>) * 2) >= IntSize ->
-					case Bulk of
-                    	<<?NL, Value:IntSize/binary, ?NL, Rest/binary>> ->
-                    		{ok, Value, Rest};
-						_ ->
-							exit("packet num error")	
-					end;		
+                size(Rest) - size(?NL) >= IntSize ->
+					<<Value:IntSize/binary, ?NL2, Rest2/binary>> = Rest,
+					% [<<Value:IntSize/binary, Rest2] = binary:split(Rest, ?NL)
+                    {ok, Value, Rest2};
                 true ->
                     %% Need more data, so we send the bulk without the
                     %% size specifier to our future self
-                    {continue, {IntSize, Bulk}}
+                    {continue, {IntSize, Rest}}
             end
     end.
 
@@ -203,8 +193,8 @@ parse_bulk({IntSize, Acc0}, Data) ->
     Acc = <<Acc0/binary, Data/binary>>,
 
     if
-        size(Acc) - (size(<<?NL>>) * 2) >= IntSize ->
-            <<?NL, Value:IntSize/binary, ?NL, Rest/binary>> = Acc,
+        size(Acc) - size(?NL) >= IntSize ->
+            <<Value:IntSize/binary, ?NL2, Rest/binary>> = Acc,
             {ok, Value, Rest};
         true ->
             {continue, {IntSize, Acc}}
@@ -221,11 +211,10 @@ parse_bulk({IntSize, Acc0}, Data) ->
 %% @doc: Parse simple replies. Data must not contain type
 %% identifier. Type must be handled by the caller.
 parse_simple(Data) ->
-    case get_newline_pos(Data) of
-        undefined ->
-            {continue, {incomplete_simple, Data}};
-        NewlinePos ->
-            <<Value:NewlinePos/binary, ?NL, Rest/binary>> = Data,
+	case binary:split(Data, ?NL) of
+		[_] ->
+			{continue, {incomplete_simple, Data}};
+		[Value, Rest] ->	
             {ok, Value, Rest}
     end.
 

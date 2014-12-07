@@ -9,7 +9,7 @@
 -include("elog.hrl").
 -include("ertdb.hrl").		 
 
--define(TCP_OPTIONS, [binary, {packet, raw}, {reuseaddr, true}, {backlog, 1024}, {nodelay, false}]). %{backlog, }, 
+-define(TCP_OPTIONS, [binary, {packet, raw}, {reuseaddr, true}, {backlog, 1024}, {nodelay, false}, {recbuf, 16 * 1024}]). %{backlog, }, 
 
 start(SocketConf) ->
 	Port = proplists:get_value(port, SocketConf),
@@ -38,7 +38,7 @@ loop(Sock, ParserState) ->
 	end. 	
 		
 mainloop(Socket, ParserState, Data) ->
-    try ertdb_parser:parse(ParserState, Data) of
+    case ertdb_parser:parse(ParserState, Data) of
         %% Got complete response, return value to client
         {ReturnCode, Value, NewParserState} ->
             handle_req(Socket, {ReturnCode, Value}),
@@ -55,13 +55,7 @@ mainloop(Socket, ParserState, Data) ->
         %% we have more data
         {continue, NewParserState} ->
             loop(Socket, NewParserState)
-	catch 
-		exit:Reason ->
-	        ?ERROR("packet error...:~p", [Reason]),
-			gen_tcp:send(Socket, build_response({error, Reason})),
-			timer:sleep(100),
-	        close(Socket)
-    end.		
+	end.		
 
 close(Socket) ->
     ?ERROR("socket close:~p",[self()]),
