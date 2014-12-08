@@ -28,14 +28,14 @@
 -include("ertdb.hrl").
 		
 start_link(Id) ->
-    gen_server:start_link({local, name(Id)}, ?MODULE, [Id], []).		
+    gen_server2:start_link({local, name(Id)}, ?MODULE, [Id], []).		
 	
 name(Id) ->
 	ertdb_util:name("ertdb", Id).		
 	
 test(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server:call(Pid, {exit, Key}).	
+	gen_server2:call(Pid, {exit, Key}).	
 
 info(Type) ->
     Pids = chash_pg:get_pids(ertdb),
@@ -43,24 +43,23 @@ info(Type) ->
 	
 
 lookup_info(Pid) ->
-	gen_server:call(Pid, lookup_info).			
+	gen_server2:call(Pid, lookup_info).			
 	
 lookup(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server:call(Pid, {lookup, Key}).		
+	gen_server2:call(Pid, {lookup, Key}).		
 
 lookup_his(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server:call(Pid, {lookup_his, Key}).		    
+	gen_server2:call(Pid, {lookup_his, Key}).		    
 	
 config(Key, Config) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server:call(Pid, {config, Key, Config}).
+	gen_server2:call(Pid, {config, Key, Config}).
 	
 insert(Key, Time, Value) ->	
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server:cast(Pid, {insert, Key, Time, Value}).
-
+	gen_server2:cast(Pid, {insert, Key, Time, Value}).
 
 fetch(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),

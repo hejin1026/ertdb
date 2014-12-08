@@ -11,7 +11,7 @@
 -include("elog.hrl").
 -include("ertdb.hrl").
 
--behavior(gen_server).
+-behavior(gen_server2).
 
 -export([start_link/3,
         write/4,
@@ -32,20 +32,20 @@
 -record(rtd, {key, time, quality=5, data, value, ref}).
 
 start_link(Id, HisStore, RtkConfig) ->
-    gen_server:start_link({local, name(Id)}, ?MODULE, [Id, HisStore, RtkConfig],
+    gen_server2:start_link({local, name(Id)}, ?MODULE, [Id, HisStore, RtkConfig],
 		[{spawn_opt, [{min_heap_size, 204800}]}]).
 		
 name(Id) ->
 	ertdb_util:name("ertdb_store_current", Id).
 			
 write(Pid, Key, Time, Value) ->
-    gen_server:cast(Pid, {write, Key, Time, Value}).
+    gen_server2:cast(Pid, {write, Key, Time, Value}).
 		
 read(Pid, Key) ->
-	gen_server:call(Pid, {read, Key}).	
+	gen_server2:call(Pid, {read, Key}).	
 	
 lookup_info(Pid) ->
-	gen_server:call(Pid, ets_info).	
+	gen_server2:call(Pid, ets_info).	
 	
 		
 init([Id, HisStore, RtkConfig]) ->

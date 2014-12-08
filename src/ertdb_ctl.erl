@@ -91,4 +91,15 @@ state(Module) ->
 	sys:get_status(list_to_atom(Module)).	
 	
 	
+%% test
+test(Count, Step) ->
+	spawn(fun() ->
+		ertdb_test:go(list_to_integer(Count), list_to_integer(Step))
+	end).
+
+test_stop() ->
+	ertdb_test:stop().			
+
+	
+	
 	
