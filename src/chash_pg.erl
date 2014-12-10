@@ -135,7 +135,7 @@ get_vnode(Name, Key) ->
     [] -> 
         {error, {no_process, Name}};
     [H|_] = VNodes ->
-        Hash = chash:hash(extbif:to_list(Key)),
+        Hash = chash:hash(Key),
         case find_vnode(Hash, VNodes) of
         {ok, VNode} ->
             VNode;
@@ -150,7 +150,7 @@ get_pids(Name) ->
     lists:usort(Pids).
 
 get_pid(Name, Key) ->
-    case get_vnode(Name, extbif:to_list(Key)) of
+    case get_vnode(Name, Key) of
     {_Key, Pid, _Vid} -> Pid;
     {error, Error} -> {error, Error}
     end.

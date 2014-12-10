@@ -19,6 +19,12 @@
 ## bing cpu
 # +sbt db	
 
+## close spin_wait
++sbwt none
+
+## A low threshold will cause earlier wakeups
++swt low
+
 ## Enable kernel poll and a few async threads
 +K true
 

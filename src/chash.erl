@@ -12,8 +12,8 @@
 -export([hash/1, max/0]).
 
 %% @doc hash
-hash(String) when is_list(String) ->
-    <<Hash:160>> = crypto:hash(sha, String), %sha1:binstring(String),
+hash(Bin) ->
+    <<Hash:160>> = crypto:hash(sha, Bin), 
     Hash.
 
 max() ->

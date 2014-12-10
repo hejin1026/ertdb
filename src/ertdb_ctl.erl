@@ -9,7 +9,7 @@
 -compile(export_all).
 
 lookup_pid(Key) ->
-	chash_pg:get_pid(ertdb, list_to_binary(Key)).
+	node(chash_pg:get_pid(ertdb, list_to_binary(Key))).
 	
 lookup_pid2(Key) ->
 	process_info(chash_pg:get_pid(ertdb, list_to_binary(Key)), [registered_name]).	
@@ -19,15 +19,16 @@ lookup(Key) ->
 	
 lookup_his(Key) ->	
 	ertdb:lookup_his(list_to_binary(Key)).
+	
+lookup_server(Process) ->
+	ertdb_server:lookup(whereis(list_to_atom(Process))).	
+	
+lookup_info(Ets, Key) ->
+	ets:lookup(list_to_atom(Ets), list_to_binary(Key)).	
 
 fetch(Key) ->
 	ertdb:fetch(list_to_binary(Key)).
-	
-lookup_config(No) ->	
-	ertdb:lookup_info(ertdb:name(No)).
-	
-lookup_current(No) ->	
-	ertdb_store_current:lookup_info(ertdb_store_current:name(No)).		
+		
 	
 cluster_info() ->
     Nodes = [node()|nodes()],
@@ -45,15 +46,12 @@ sockets() ->
     ActiveSockets = mochiweb_socket_server:get(ertdb_socket, active_sockets),
     ?PRINT("Total Client Sockets: ~p~n", [ActiveSockets]).
 
-process_count() ->	
-	erlang:system_info(process_count).	
-
-%Type: ertdb | jour | curr | hist
+%Type: ertdb | jour | hist
 process_all(Type) ->
     Infos = lists:flatten(ertdb:info(Type)),
     [[Name, Info] || {Name, Info} <- Infos].	
 
-%Type : ertdb_rttb | ertdb_rttb_last | ertdb_rtk_config
+%Type : ertdb_rttb | ertdb_hist | ertdb_rtk_config
 ets_info(Type) ->
     Tabs = ets:all(),
     ErrdbTabs = lists:filter(fun(Tab) -> 
@@ -84,6 +82,12 @@ process(Process) ->
 process2(Process) ->
     process_info(whereis(list_to_atom(Process)), [messages]).	
 	
+
+%% systerm
+process_count() ->	
+	erlang:system_info(process_count).	
+	
+	
 memory() ->
 	erlang:memory().	
 	
@@ -96,6 +100,11 @@ test(Count, Step) ->
 	spawn(fun() ->
 		ertdb_test:go(list_to_integer(Count), list_to_integer(Step))
 	end).
+	
+test_config(Count, Step) ->
+	spawn(fun() ->
+		ertdb_test:config(list_to_integer(Count), list_to_integer(Step))
+	end).	
 
 test_stop() ->
 	ertdb_test:stop().			

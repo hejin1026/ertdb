@@ -10,8 +10,8 @@
 -export([start_link/1, info/1,
 		config/2,
 		insert/3,
-		fetch/1, fetch/3,
-		lookup/1, lookup_his/1, test/1,lookup_info/1,
+		fetch/1, fetch/3, read/2,
+		lookup/1, lookup_his/1, test/1,
 		name/1
 		]).
 
@@ -22,7 +22,9 @@
         terminate/2,
         code_change/3]).
 		
--record(state, {rtk_config, journal, cur_store, his_store}).	
+-record(state, {rtk_config, rttb, journal, his_store}).	
+
+-record(rtd, {key, time, quality=5, data, value, ref}).
 
 -include("elog.hrl").	
 -include("ertdb.hrl").
@@ -41,10 +43,6 @@ info(Type) ->
     Pids = chash_pg:get_pids(ertdb),
     [gen_server2:call(Pid, {info, Type}) || Pid <- Pids].
 	
-
-lookup_info(Pid) ->
-	gen_server2:call(Pid, lookup_info).			
-	
 lookup(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server2:call(Pid, {lookup, Key}).		
@@ -53,6 +51,7 @@ lookup_his(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server2:call(Pid, {lookup_his, Key}).		    
 	
+%% 	
 config(Key, Config) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
 	gen_server2:call(Pid, {config, Key, Config}).
@@ -63,19 +62,43 @@ insert(Key, Time, Value) ->
 
 fetch(Key) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server2:call(Pid, {fetch, Key}, 7000).	
+	rpc:call(node(Pid), ertdb, read, [Pid, Key]).
+		
 	
 fetch(Key, Begin, End) ->
 	Pid = chash_pg:get_pid(?MODULE, Key),
-	gen_server2:call(Pid, {fetch, Key, Begin, End}, 16000).	
+	{ok, DataList} = rpc:call(node(Pid), ertdb_store_history, read, [Pid, Key, Begin, End]),
+	DataListF = ertdb_store_history:filter_data(lists:flatten(DataList), Begin, End),
+	{ok, DataListF}.
+	
+	
+read(Pid, Key) ->
+	case ertdb_server:lookup(Pid) of
+		[] -> 
+			{error, nopid};
+		[{_, Id, _}] ->
+			?INFO("pid:~p, self:~p",[Pid, self()]),
+		 	case handle_read(Key, ertdb_util:name("ertdb_rttb", Id)) of
+				{ok, no_key} ->
+					case ets:lookup(ertdb_util:name("ertdb_rtk_config", Id), Key) of
+						[] -> 
+							{ok, invalid_key};	
+						[_config] ->
+							{ok, no_key}
+					end;
+				Other ->
+					Other
+			end
+	end.	
 		
 	
 init([Id]) ->
 	process_flag(trap_exit, true),
-	RtkConfig = ets:new(ertdb_util:name("ertdb_rtk_config", Id), [set, {keypos, #rtk_config.key}, named_table]),
+	RtkConfig = ets:new(ertdb_util:name("ertdb_rtk_config", Id), 
+		[set, {keypos, #rtk_config.key}, named_table,{read_concurrency, true}]),
+	RTTB = ets:new(ertdb_util:name("ertdb_rttb", Id), [set, {keypos, #rtd.key}, named_table]),
     %start store process
 	{ok, HisStore} = ertdb_store_history:start_link(Id, RtkConfig),
-    {ok, CurStore} = ertdb_store_current:start_link(Id, HisStore, RtkConfig),
 
     %start journal process
     {ok, Journal} = ertdb_journal:start_link(Id),
@@ -85,21 +108,19 @@ init([Id]) ->
     chash_pg:create(?MODULE),
     chash_pg:join(?MODULE, self(), name(Id), VNodes),
 	
-	{ok, #state{rtk_config=RtkConfig, journal=Journal, cur_store=CurStore, his_store=HisStore}}.
+	ertdb_server:register(self(), Id, HisStore),
+	{ok, #state{rtk_config=RtkConfig, rttb=RTTB, journal=Journal, his_store=HisStore}}.
 	
 	
-handle_call({info, Type}, _From, #state{journal=Journal, cur_store=CurStore, his_store=HisStore} = State) ->
+handle_call({info, Type}, _From, #state{journal=Journal, his_store=HisStore} = State) ->
 	Reply = case Type of
 		"ertdb" -> ertdb_util:pinfo(self());
 		"jour" -> ertdb_util:pinfo(Journal);
-		"curr" -> ertdb_util:pinfo(CurStore);
 		"hist" -> ertdb_util:pinfo(HisStore);
 		_ -> []
      end,
     {reply, Reply, State};	
 	
-handle_call(lookup_info, _From, #state{rtk_config=RtkConfig}=State) ->
-	{reply, ets:info(RtkConfig), State};	
 	
 handle_call({lookup, Key}, _From, #state{rtk_config=RtkConfig}=State) ->
 	{reply, ets:lookup(RtkConfig, Key), State};		
@@ -109,8 +130,7 @@ handle_call({lookup_his, Key}, _From, #state{his_store=HisStore}=State) ->
 	{reply, Values, State};
 	
 handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) ->
-	% ?ERROR("config:~p,~p", [Key, Config]),
-	% ertdb_util:incr(count_config, 1),
+	?INFO("config:~p,~p", [Key, Config]),
 	Rest = 
 		try 
 			KConfig = build_config(RtkConfig, Key, binary_to_list(Config)),
@@ -128,9 +148,9 @@ handle_call({config, Key, Config}, _From,  #state{rtk_config=RtkConfig}=State) -
 	    end,
 	{reply, Rest, State};
 		
-handle_call({fetch, Key}, _From, #state{rtk_config=RtkConfig, cur_store=CurStore}=State) ->
+handle_call({fetch, Key}, _From, #state{rttb=Rttb, rtk_config=RtkConfig}=State) ->
 	%% {ok, no_key} | {ok, #real_data}
- 	Value = try ertdb_store_current:read(CurStore, Key) of
+ 	Value = case handle_read(Key, Rttb) of
 		{ok, no_key} ->
 			case ets:lookup(RtkConfig, Key) of
 				[] -> 
@@ -140,10 +160,7 @@ handle_call({fetch, Key}, _From, #state{rtk_config=RtkConfig, cur_store=CurStore
 			end;
 		Other ->
 			Other
-		catch _:Reason ->
-			?ERROR("fetch timeout:~p,~p", [Key, erlang:get_stacktrace()]),
-			{error, timeout}
-		end,			
+		end,		
 	{reply, Value, State};
 	
 handle_call({fetch, Key, Begin, End}, _From, #state{his_store=HisStore}=State) ->
@@ -161,14 +178,41 @@ handle_call(Req, _From, State) ->
     {stop, {error, {bagreq, Req}}, State}.
 	
 
-handle_cast({insert, Key, Time, Value}, #state{journal=Journal, cur_store=CurStore} = State) ->
-	ertdb_store_current:write(CurStore, Key, Time, Value),
+handle_cast({insert, Key, Time, Value}, #state{journal=Journal} = State) ->
+	handle_write(Key, Time, Value, State),
 	ertdb_journal:write(Journal, Key, Time, Value),
     {noreply, State};
 	
 handle_cast(Msg, State) ->
     ?ERROR("badmsg: ~p", [Msg]),
     {noreply, State}.
+	
+handle_info({maxtime, Key}, #state{rttb=Rttb, his_store=HisStory, rtk_config=RtkConfig} = State) ->
+	case ets:lookup(RtkConfig, Key) of
+		[] ->
+			% 可能ertdb死掉配置清掉了
+			?ERROR("no ertdb config:~p", [Key]);
+		[#rtk_config{quality=IsQuality, maxtime=Maxtime}=Config] ->	
+			[#rtd{value=Value, time=LastTime, quality=LastQua}=LastRtd] = ets:lookup(Rttb, Key),
+				?INFO("cur maxtime data:~p", [LastRtd]),			
+				% Time = extbif:timestamp(), 机器时间可能不一致
+				Time = LastTime + Maxtime,
+				Quality  = case check_quality(IsQuality) of
+					  true ->
+						  if(LastQua - 1 > 1) -> 
+							  Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+							  ets:insert(Rttb, LastRtd#rtd{time=Time, quality= LastQua - 1, ref=Ref});
+						    true -> 
+							  ets:insert(Rttb, LastRtd#rtd{time=Time, quality= 1 })
+						  end,
+						  LastQua - 1;
+					  false ->
+						  ets:insert(Rttb, LastRtd#rtd{time=Time, quality=LastQua}), 
+						  LastQua
+				end,
+				ertdb_store_history:write(HisStory, Key, Time, Quality, Value, Config)
+	end,	
+	{noreply, State};	
 
 handle_info({'EXIT', Pid, Reason}, State) ->
 	?ERROR("unormal exit message received: ~p, ~p", [Pid, Reason]),
@@ -195,6 +239,61 @@ priorities_call(_, _From, _State) ->
 %% ------------------------------------------------------------------
 %% Internal Function Definitions
 %% ------------------------------------------------------------------	
+handle_read(Key, Rttb) ->
+	case ets:lookup(Rttb, Key) of
+		[] -> 
+			{ok, no_key};
+		[#rtd{time=Time, quality=Quality, data=Data, value=Value}] ->
+			{ok, #real_data{key=Key, time=Time, quality=Quality, data=Data, value=Value}}
+	end.
+
+
+handle_write(Key, Time, Data, #state{rttb=Rttb, his_store=HisStory, rtk_config=RtkConfig}) ->
+	?INFO("cur write:~p, ~p, ~p", [Key, Time, Data]),
+	case ets:lookup(RtkConfig, Key)	of
+		[] -> 
+			ets:insert(Rttb, #rtd{key=Key,time=Time,data=Data,value=Data}),
+			ertdb_store_history:write(HisStory, Key, Time, 5, Data);
+			
+		[#rtk_config{maxtime=Maxtime} = Config] ->
+			Value = format_value(Data, Config),
+			case ets:lookup(Rttb, Key) of
+				[] ->
+					Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+					NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
+					ets:insert(Rttb, NewRtData),
+					ertdb_store_history:write(HisStory, Key, Time, 5, Value, Config);
+				[#rtd{time=LastTime, quality=LastQuality, value=LastValue, ref=LastRef}] ->
+					InsertFun = fun() ->
+						?INFO("cur pass data:~p", [{Key, Time, Value}]),
+						case ertdb_util:cancel_timer(LastRef) of
+							false ->
+								?ERROR("cancel fail,timeout has send:~p, lastime:~p, maxtime:~p, value:~p", 
+										[Key, LastTime, Maxtime, Value]);
+							_ ->
+								ok
+						end,
+						Ref = erlang:send_after(Maxtime * 1000, self(), {maxtime, Key}),
+						NewRtData = #rtd{key=Key,time=Time,data=Data,value=Value,ref=Ref},
+						ets:insert(Rttb, NewRtData),
+						ertdb_store_history:write(HisStory, Key, Time, 5, Value, Config)
+					end,
+								
+					if(LastQuality < 5) ->
+						InsertFun();
+					true ->	
+						case check({last,LastTime,LastValue}, {new,Time,Value}, Config) of
+							true ->
+								InsertFun();
+							false ->
+								?INFO("cur filte data:~p", [{Key, Time, Value}]),
+								ok
+						end
+				    end	
+			end			
+	end.
+
+
 	
 build_config(RtkConfig, Key, Config) ->
 	Data = [list_to_tuple(string:tokens(Item, "="))||Item <- string:tokens(Config, ",")],
@@ -235,4 +334,28 @@ parse([{"his_mintime", Value}|Config], RTK) ->
 	parse(Config, RTK#rtk_config{his_mintime=extbif:to_integer(Value)});
 parse([{_Key, _Value}|Config], RTK) ->			
 	parse(Config, RTK).
+
+% quality: 1 | 0
+check_quality(Quality) ->
+	Quality == "1" .
+
+check({last, Lastime, LastValue}, {new, Time, Value}, #rtk_config{dev=Dev, mintime=Mintime, maxtime=Maxtime}) ->
+	Interval = Time - Lastime,
+	Rule = lists:concat(["> interval ", Mintime]),
+	LV = extbif:to_integer(LastValue),
+	Deviation = abs(extbif:to_integer(Value) - LV),
+	Rule2 = lists:concat(["> deviation ", LV * Dev]),	
+	judge([Rule,Rule2], [{interval, Interval}, {deviation, Deviation}]).
+		
 	
+judge([], _Data) ->	
+	true;
+judge([Rule|Rs], Data) ->
+	{ok, Exp} = prefix_exp:parse(Rule),
+	case prefix_exp:eval(Exp, Data) of
+		true -> judge(Rs, Data);
+		false -> false
+	end.	
+	
+format_value(Data, #rtk_config{coef=Coef, offset=Offset}) ->
+	extbif:to_integer(Data) * Coef + Offset.	

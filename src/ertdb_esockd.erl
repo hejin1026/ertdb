@@ -67,6 +67,7 @@ handle_req(Socket, Data) ->
 	case handle_reply(Data) of
 		{reply, Reply} ->
 			try
+				?INFO("reply:~p", [Reply]),
 				Packet = build_response(Reply),
 				case gen_tcp:send(Socket, Packet) of
 					ok -> ok;
@@ -117,17 +118,17 @@ handle_reply(Req) ->
 	
 build_response({ok, Rest}) ->
 	Data = format_data(Rest),
-	lists:concat(["$", length(Data), ?NL, Data, ?NL]);
+	lists:concat(["$", length(Data), ?NL2, Data, ?NL2]);
 build_response({error, Reason}) ->		
-	lists:concat(["-", "error", " ", Reason, ?NL]);	
+	lists:concat(["-", "error", " ", Reason, ?NL2]);	
 build_response(Rest) when is_integer(Rest) ->
-	lists:concat([":", Rest, ?NL]);	
+	lists:concat([":", Rest, ?NL2]);	
 build_response(Rest) when is_atom(Rest) ->
-	lists:concat(["+", Rest, ?NL]);
+	lists:concat(["+", Rest, ?NL2]);
 build_response(Rest) when is_list(Rest) ->
 	Command = [build_response({ok, R})||R <- Rest],
 	?INFO("get length:~p", [length(Rest)]),
-	lists:concat(["*", length(Rest), ?NL, string:join(Command, "")]);
+	lists:concat(["*", length(Rest), ?NL2, string:join(Command, "")]);
 build_response(Rest) ->
 	throw({unsupport_build, Rest}).		
 

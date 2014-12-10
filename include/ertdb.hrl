@@ -26,7 +26,8 @@
           continuation_data :: continuation_data() | undefined
 }).
 
--define(NL, "\r\n").
+-define(NL, <<"\r\n">>).
+-define(NL2, "\r\n").
 
 -define(SOCKET_OPTS, [binary, {active, once}, {packet, raw}, {reuseaddr, true}, {nodelay, false}, {delay_send, true}]).
 

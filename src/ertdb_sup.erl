@@ -15,6 +15,8 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 	
 init([]) ->
+	Server = ?worker(ertdb_server),
+	
 	Pool = 
 		case application:get_env(pool_size) of
 			{ok, schedulers} -> erlang:system_info(schedulers);
@@ -47,7 +49,10 @@ init([]) ->
 	% 
 	% CurStore = ?CHILD(ertdb_store_current, worker),
 	% HisStore = ?CHILD(ertdb_store_history, worker),
-	Test = ?worker(ertdb_test),
+	Test = case application:get_env(test) of
+		{ok, true} ->[?worker(ertdb_test)];
+		_ -> []
+	end,		
 		   
-	{ok, {{one_for_one, 5, 10}, [Socket, Httpd, Pg, Monitor, Test|Ertdbs]}}.
+	{ok, {{one_for_one, 5, 10}, Test ++ [Server, Socket, Httpd, Pg, Monitor|Ertdbs]}}.
 	
