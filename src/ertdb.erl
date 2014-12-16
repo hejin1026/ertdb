@@ -36,7 +36,7 @@ name(Id) ->
 	ertdb_util:name("ertdb", Id).		
 	
 test(Key) ->
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	gen_server2:call(Pid, {exit, Key}).	
 
 info(Type) ->
@@ -44,32 +44,42 @@ info(Type) ->
     [gen_server2:call(Pid, {info, Type}) || Pid <- Pids].
 	
 lookup(Key) ->
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	gen_server2:call(Pid, {lookup, Key}).		
 
 lookup_his(Key) ->
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	gen_server2:call(Pid, {lookup_his, Key}).		    
 	
 %% 	
 config(Key, Config) ->
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	gen_server2:call(Pid, {config, Key, Config}).
 	
 insert(Key, Time, Value) ->	
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	gen_server2:cast(Pid, {insert, Key, Time, Value}).
 
 fetch(Key) ->
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	rpc:call(node(Pid), ertdb, read, [Pid, Key]).
 		
 	
 fetch(Key, Begin, End) ->
-	Pid = chash_pg:get_pid(?MODULE, Key),
+	Pid = get_pid(Key),
 	{ok, DataList} = rpc:call(node(Pid), ertdb_store_history, read, [Pid, Key, Begin, End]),
 	DataListF = ertdb_store_history:filter_data(lists:flatten(DataList), Begin, End),
 	{ok, DataListF}.
+	
+get_pid(Key) ->
+	case ets:lookup(ckey, Key) of
+		[] -> 
+			Pid = chash_pg:get_pid(?MODULE, Key),
+			ertdb_server:insert(Key, Pid),
+			Pid;
+		[{_, Pid}] ->
+			Pid
+	end.			
 	
 	
 read(Pid, Key) ->

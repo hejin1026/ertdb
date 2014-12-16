@@ -26,6 +26,9 @@ lookup_server(Process) ->
 lookup_info(Ets, Key) ->
 	ets:lookup(list_to_atom(Ets), list_to_binary(Key)).	
 
+lookup_ckey(Key) ->
+	ets:lookup(ckey, list_to_binary(Key)).
+
 fetch(Key) ->
 	ertdb:fetch(list_to_binary(Key)).
 		

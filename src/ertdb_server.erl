@@ -3,7 +3,7 @@
 
 -include("elog.hrl").
 
--export([start_link/0, lookup/1, register/3, unregister/1]).
+-export([start_link/0, lookup/1, register/3, unregister/1, insert/2]).
 
 -behaviour(gen_server2).
 
@@ -32,11 +32,16 @@ lookup(CurrPid) ->
 
 unregister(CurrPid) ->
     gen_server2:cast(?MODULE, {unregister, CurrPid}).
+	
+insert(Key, Pid) ->
+	gen_server2:cast(?MODULE, {insert, Key, Pid}).
+						
 
 %%----------------------------------------------------------------------------
 
 init([]) ->
 	ets:new(server, [set, named_table]),
+	ets:new(ckey, [set, named_table]),
 	?INFO("~p is started.", [?MODULE]),
     {ok, #state{}}. 
 
@@ -54,6 +59,10 @@ handle_cast({register, CurrPid, Id, Pid}, State) ->
 
 handle_cast({unregister, CurrPid}, State) ->
 	ets:delete(client, CurrPid),
+	{noreply, State};
+	
+handle_cast({insert, Key, Pid}, State) ->
+	ets:insert(ckey, {Key, Pid}),
 	{noreply, State};
 
 handle_cast(Msg, State) ->
